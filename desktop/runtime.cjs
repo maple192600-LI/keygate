@@ -28,10 +28,11 @@ function secureDirectory(target) {
   process.stderr.write('MANAGER_STAGE acl-done\n');
 }
 async function freePort(preferred) {
+  process.stderr.write('MANAGER_STAGE port-request\n');
   return new Promise((resolve, reject) => {
     const listener = net.createServer();
     listener.once('error', reject);
-    listener.listen(preferred, '127.0.0.1', () => { const port = listener.address().port; listener.close(error => error ? reject(error) : resolve(port)); });
+    listener.listen(preferred, '127.0.0.1', () => { process.stderr.write('MANAGER_STAGE port-listening\n'); const port = listener.address().port; listener.close(error => { process.stderr.write('MANAGER_STAGE port-released\n'); error ? reject(error) : resolve(port); }); });
   });
 }
 function readSecrets(file) {
@@ -90,6 +91,7 @@ async function waitForHealth(address, child, token, deadline = 30000) {
 async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable }) {
   // No database process or web service may start before these secrets exist.
   const config = await secrets(dataRoot);
+  process.stderr.write('MANAGER_STAGE config-ready\n');
   const cluster = path.join(dataRoot, 'postgres');
   const logs = path.join(dataRoot, 'logs'); directory(logs);
   const pg = name => path.join(postgresRoot, 'bin', `${name}.exe`);
@@ -97,7 +99,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
     if (fs.existsSync(cluster) && fs.readdirSync(cluster).length) throw new Error('数据库初始化尚未完成，请保留资料并联系支持；不会清空目录。');
     const passwordFile = path.join(dataRoot, `init-${randomBytes(16).toString('hex')}.tmp`);
     fs.writeFileSync(passwordFile, config.databasePassword, { flag: 'wx', mode: 0o600 });
-    try { execute(pg('initdb'), ['-D', cluster, '-U', 'snail_runtime', '--pwfile', passwordFile, '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--encoding=UTF8', '--locale=C']); }
+    try { process.stderr.write('MANAGER_STAGE initdb-start\n'); execute(pg('initdb'), ['-D', cluster, '-U', 'snail_runtime', '--pwfile', passwordFile, '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--encoding=UTF8', '--locale=C']); process.stderr.write('MANAGER_STAGE initdb-done\n'); }
     finally { fs.unlinkSync(passwordFile); }
   }
   let running = false;
