@@ -31,7 +31,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
   const pg=path.join(path.dirname(executable),'resources/postgresql/bin/pg_ctl.exe');
   assert.equal(spawnSync(pg,['status','-D',path.join(data,'postgres')],{windowsHide:true}).status,3);
  }
- t.after(async()=>{try{if(page&&!page.isClosed())await page.screenshot({path:path.join(root,'final-window.png'),fullPage:true});}finally{try{await close();}finally{fs.writeFileSync(path.join(root,'process.log'),log);}}});
+ t.after(async()=>{try{if(page&&!page.isClosed())await page.screenshot({path:path.join(root,'final-window.png'),fullPage:true});}finally{try{await close();}finally{if(child&&child.exitCode===null){fs.writeFileSync(path.join(root,'cleanup-failure.json'),JSON.stringify({normalStop:false,ownedChildPID:child.pid}));child.kill();child.stdout?.destroy();child.stderr?.destroy();}fs.writeFileSync(path.join(root,'process.log'),log);}}});
  async function launch(){
   child=spawn(executable,['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1',`--user-data-dir=${path.join(root,'diagnostics')}`],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
   child.stdout.on('data',chunk=>{log+=chunk.toString();});child.stderr.on('data',chunk=>{log+=chunk.toString();fs.writeFileSync(path.join(root,'process.log'),log);});
