@@ -1,0 +1,41 @@
+{
+  "classification": "TEST_ONLY",
+  "source": "RFC 8032 section 7.1, TEST 1; public test identity only",
+  "sourceUrl": "https://www.rfc-editor.org/rfc/rfc8032.html#section-7.1",
+  "warning": "仅用于开发互操作验证，禁止纳入正式发行信任列表。许可样例使用合成设备摘要和客户ID，不能授权真实客户。交付目录不含私钥或seed。",
+  "keyId": "lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2",
+  "publicKeyFile": "TEST_ONLY.public-key.pem",
+  "licenseFile": "TEST_ONLY.license-v2.snaillic",
+  "signatureDomainUtf8WithNul": "stq-license/v2\u0000",
+  "payload": {
+    "formatVersion": 2,
+    "licenseId": "9e9bce53-4961-4ee6-8c76-ed02a3137dcb",
+    "issuanceId": "60dc905f-963f-4eb0-8cc0-6a16855d1d30",
+    "productId": "cn.snailfinance.desktop",
+    "purpose": "commercial",
+    "customerId": "b629c5b0-ea8c-4cd6-82e9-b7a247a229a4",
+    "revision": 1,
+    "issuedAt": "2026-10-22T01:00:00.000Z",
+    "notBefore": "2026-10-22T01:00:00.000Z",
+    "expiresAt": "2026-11-22T01:00:00.000Z",
+    "binding": {
+      "type": "windows-machineguid-sha256/v1",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "keyId": "lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2"
+  },
+  "expected": {
+    "rawBytes": 978,
+    "payloadBytes": 570,
+    "signatureBytes": 64,
+    "licenseSha256": "f00cf2cac79761b04c6ce0df466cd54d7f0826662dd4db8cf47a81b173be05e1",
+    "payloadSha256": "193db215f7c355c2942546307e361419297a964e7264fbbc28b08ced229f9c70",
+    "signatureBase64url": "p76d-AHMSWqgcUwc1TjgUD6iw8BS0-ftcLzr-r5AD_kbAhENv7WmURYLh60lfBx0PzyaR0dd2mj-GRjkW7bxCQ",
+    "signatureValid": true
+  },
+  "verificationStatus": {
+    "node": "PASS：独立进程仅公钥验签；keyId、原字节摘要、编码与字段顺序通过；改字节及错误签名域被拒绝。",
+    "go": "未执行；开发T02必须完成Go/Node双向互验",
+    "schemas": "JSON语法、字段与主规格一致性、所有对象关闭未知属性已核对；未运行通用JSON Schema验证器。"
+  }
+}

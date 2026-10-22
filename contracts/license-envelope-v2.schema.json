@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:snail:licensing:license-envelope:v2",
+  "title": "蜗牛许可证外层 v2",
+  "description": "开发合同，依据主规格第 7.3 节。128 KiB 文件上限和签名验证由实现负责；不得信任文件提供的公钥。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "keyId",
+    "payloadB64",
+    "signatureB64"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 2
+    },
+    "keyId": {
+      "type": "string",
+      "pattern": "^lic-[0-9a-f]{64}$"
+    },
+    "payloadB64": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "无填充 base64url。解码后须重新编码比较，保证规范编码，再对原始载荷字节验签。"
+    },
+    "signatureB64": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+      "description": "Ed25519 的 64 字节签名，规范无填充 base64url；仍须程序解码核对长度。"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "formatVersion": 2,
+  "requestId": "0b1ecb12-3e5c-4db0-a349-c965bf7db176",
+  "productId": "cn.snailfinance.desktop",
+  "device": {
+    "type": "windows-machineguid-sha256/v1",
+    "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "deviceLabel": "财务电脑（合成样例）",
+  "appVersion": "TEST_ONLY"
+}
