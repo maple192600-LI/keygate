@@ -2,7 +2,7 @@ import {useRef,useState,type FormEvent} from "react"
 import {Button} from "@/components/ui/button"
 import {Input} from "@/components/ui/input"
 import {Label} from "@/components/ui/label"
-import {Dialog,DialogContent,DialogHeader,DialogTitle} from "@/components/ui/dialog"
+import {Dialog,DialogContent,DialogBody,DialogHeader,DialogTitle} from "@/components/ui/dialog"
 import {localDownload,localRequest,LocalAPIError,readLocalFile} from "@/lib/local-offline-api"
 import type {CommercialCustomer} from "./local-customers"
 
@@ -51,7 +51,7 @@ export default function LocalIssue({customer,onClose,onSettings,existing}:{custo
   catch(cause){if(cause instanceof LocalAPIError&&cause.status===404){setUncertain(false);setNotice("未查到已提交结果，可按原操作重试");return}throw cause}
  })}
  const copyText=result?`${customer.displayName}：蜗牛财务授权文件 ${result.fileName}，${result.expiresAt===null?"永久有效":`有效至北京时间 ${dateText(result.expiresAt)} 之前`}。请在蜗牛财务中选择“导入授权文件”，导入后按提示创建本机管理员。此文件仅适用于申请设备。`:""
- return <Dialog open onOpenChange={open=>{if(!open&&!busy&&!uncertain)onClose()}}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{result?"签发完成":title} · {customer.displayName}</DialogTitle></DialogHeader>
+ return <Dialog open onOpenChange={open=>{if(!open&&!busy&&!uncertain)onClose()}}><DialogContent className="lc-dialog max-w-2xl"><DialogHeader><DialogTitle>{result?"签发完成":title} · {customer.displayName}</DialogTitle></DialogHeader><DialogBody>
   {error&&<div role="alert" className="text-sm text-destructive">{error}</div>}{notice&&<div role="status" className="text-sm">{notice}</div>}
   {result?<div className="grid gap-5"><dl className="grid grid-cols-[7rem_1fr] gap-3 text-sm"><dt>生效时间</dt><dd>{dateText(result.notBefore)}</dd><dt>有效期限</dt><dd>{dateText(result.expiresAt)}</dd><dt>授权版本</dt><dd>{result.revision}</dd><dt>交付状态</dt><dd data-testid="delivery-status">{delivered?"已登记交付":"待交付"}</dd></dl>
    <div className="flex gap-3"><Button disabled={busy} onClick={()=>void perform(()=>localDownload(`/admin/license-issuances/${result.issuanceId}/file`,result.fileName))}>下载授权文件</Button><Button variant="outline" disabled={busy} onClick={()=>void perform(async()=>{await navigator.clipboard.writeText(copyText);setNotice("交付说明已复制")})}>复制交付说明</Button></div>
@@ -65,7 +65,7 @@ export default function LocalIssue({customer,onClose,onSettings,existing}:{custo
    {existing&&<div className="col-span-2 grid gap-2"><Label htmlFor="issue-reason">{action==="transfer"?"换机原因":"续期备注"}</Label><Input id="issue-reason" maxLength={1000} value={reason} onChange={event=>setReason(event.target.value)} required={action==="transfer"} disabled={busy}/></div>}
    <div className="col-span-2 flex gap-3"><Button type="submit" disabled={busy}>{busy?"正在核对…":"核对并预览"}</Button><Button variant="outline" type="button" disabled={busy} onClick={onClose}>取消</Button></div>
   </form>}
- </DialogContent></Dialog>
+ </DialogBody></DialogContent></Dialog>
 }
 
 export function DeliveryForm({issuance,onRecorded}:{issuance:Issued;onRecorded:()=>void}){

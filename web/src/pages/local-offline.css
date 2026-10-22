@@ -5,5 +5,100 @@
   --color-card: #ffffff;
   --color-foreground: #252529;
   --color-ring: #356ae6;
+  --color-border: #e4e6ee;
+  --color-input: #dcdfe8;
+  --color-muted: #f6f7fa;
+  --color-muted-foreground: #667085;
+  --color-accent: #edf2ff;
+  --color-accent-foreground: #356ae6;
+  --color-card-foreground: #252529;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #252529;
+  --color-destructive: #c83242;
   font-size: 14px;
+  color: var(--color-foreground);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
 }
+
+.snail-local *, .snail-local ::before, .snail-local ::after { border-color: var(--color-border); }
+.snail-local button { box-shadow: none; }
+.snail-local input, .snail-local select { min-width: 0; box-shadow: none; }
+.snail-local input:focus-visible, .snail-local select:focus-visible { outline: 2px solid #a9bffd; outline-offset: 1px; }
+.lc-shell { display: grid; grid-template-columns: 184px minmax(0, 1fr); min-height: 100vh; }
+.lc-sidebar { position: sticky; top: 0; display: flex; flex-direction: column; height: 100vh; padding: 26px 12px 20px; border-right: 1px solid var(--color-border); background: #fff; }
+.lc-brand { display: flex; align-items: center; gap: 10px; padding: 0 8px 32px; }
+.lc-brand img { width: 34px; height: 34px; }
+.lc-brand strong { font-size: 16px; line-height: 1.5; font-weight: 600; }
+.lc-sidebar nav { display: grid; gap: 7px; }
+.lc-sidebar nav button { height: 42px; justify-content: flex-start; gap: 12px; padding: 0 14px; color: #626b7c; font-weight: 400; }
+.lc-sidebar nav button[aria-current="page"] { color: #356ae6; background: #edf2ff; font-weight: 600; }
+.lc-sidebar nav svg { width: 18px; height: 18px; }
+.lc-sidebar footer { display: grid; gap: 16px; margin-top: auto; padding: 20px 8px 0; }
+.lc-sidebar footer button { justify-content: flex-start; padding: 0; color: #626b7c; }
+.lc-sidebar footer a { font-size: 11px; }
+.lc-workspace { min-width: 0; }
+.lc-topbar { display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 0 28px; border-bottom: 1px solid var(--color-border); background: #fff; font-size: 12px; color: #667085; }
+.lc-breadcrumb-separator { padding: 0 12px; color: #c0c5d0; }
+.lc-content { padding: 28px; }
+.lc-list-page, .lc-settings { display: grid; min-width: 0; gap: 22px; }
+.lc-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; }
+.lc-page-heading h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.5; }
+.lc-list-panel { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; }
+.lc-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 18px; border-bottom: 1px solid var(--color-border); }
+.lc-search { position: relative; width: min(320px, 100%); }
+.lc-search svg { position: absolute; left: 10px; top: 10px; width: 16px; height: 16px; color: #8b94a7; pointer-events: none; }
+.lc-search input { padding-left: 34px; }
+.lc-list-panel table { font-size: 13px; }
+.lc-list-panel thead { background: #f8f9fc; }
+.lc-list-panel th { height: 40px; padding: 8px 16px; white-space: nowrap; font-size: 12px; font-weight: 400; }
+.lc-list-panel td { padding: 15px 16px; line-height: 1.65; }
+.lc-customers-table { min-width: 860px; table-layout: fixed; }
+.lc-customers-table th:first-child { width: 21%; }
+.lc-customers-table th:nth-child(2) { width: 11%; }
+.lc-customers-table th:nth-child(3) { width: 17%; }
+.lc-customers-table th:nth-child(4) { width: 14%; }
+.lc-customers-table th:nth-child(5) { width: 7%; }
+.lc-customers-table th:nth-child(6) { width: 13%; }
+.lc-customers-table th:last-child { width: 164px; }
+.lc-customers-table td { overflow-wrap: anywhere; }
+.lc-text-action { color: var(--color-primary); text-align: left; cursor: pointer; }
+.lc-text-action:hover { text-decoration: underline; }
+.lc-text-action:focus-visible { outline: 2px solid #a9bffd; outline-offset: 3px; border-radius: 2px; }
+.lc-row-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.lc-row-actions button { height: 28px; padding: 0; font-size: 12px; }
+.lc-count { display: inline-block; min-width: 28px; padding: 0 6px; border: 1px solid var(--color-border); border-radius: 4px; text-align: center; color: #667085; font-size: 12px; }
+.lc-empty { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; min-height: 180px; color: #667085; font-size: 13px; }
+.lc-empty svg { width: 30px; height: 30px; color: #b5bfd1; stroke-width: 1.25; }
+.lc-pagination { display: flex; justify-content: space-between; align-items: center; min-height: 50px; padding: 10px 18px; border-top: 1px solid var(--color-border); color: #667085; font-size: 12px; }
+.lc-pagination > div { display: flex; align-items: center; gap: 12px; }
+.lc-settings-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.lc-settings-pair > section { max-width: none; }
+.lc-signing-panel > section { border: 0; border-top: 1px solid var(--color-border); border-radius: 0 0 10px 10px; }
+.snail-local [role="dialog"] { border-color: var(--color-border); }
+.snail-local [role="dialog"] input[type="file"] { height: auto; min-height: 36px; padding: 6px 10px; }
+.snail-local [role="dialog"] form > div { min-width: 0; }
+.lc-dialog { max-height: calc(100vh - 56px); padding: 24px; }
+.lc-drawer { display: flex; flex-direction: column; gap: 26px; }
+.lc-drawer > h2 { padding-bottom: 18px; padding-right: 24px; border-bottom: 1px solid var(--color-border); }
+.lc-drawer form { flex-shrink: 0; }
+.snail-local [role="alert"] { line-height: 1.6; }
+@media (max-width: 1180px) {
+  .lc-shell { grid-template-columns: 168px minmax(0, 1fr); }
+  .lc-content { padding: 24px 20px; }
+  .lc-topbar { padding: 0 20px; }
+  .lc-toolbar { row-gap: 12px; }
+}
+@media (max-width: 760px) {
+  .lc-shell { grid-template-columns: 144px minmax(0, 1fr); }
+  .lc-brand { gap: 6px; padding-left: 0; }
+  .lc-brand strong { font-size: 14px; }
+  .lc-brand img { width: 28px; height: 28px; }
+  .lc-content { padding: 18px 14px; }
+  .lc-settings-pair { grid-template-columns: minmax(0, 1fr); }
+  .lc-toolbar form { flex-wrap: wrap; }
+}
+
+.snail-local button:focus-visible { outline: 2px solid #a9bffd; outline-offset: 2px; }
+.lc-drawer .lc-page-heading h1 { font-size: 18px; }
+.lc-drawer .lc-empty { min-height: 110px; }
+.lc-signing-status { color: #356ae6; font-size: 13px; }

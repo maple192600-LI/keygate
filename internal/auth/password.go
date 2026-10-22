@@ -17,7 +17,13 @@ func ValidPassword(password string) bool {
 }
 func HashPassword(password string) (string, error) {
 	if !ValidPassword(password) {
-		return "", errors.New("密码须为 10 至 128 个字符，UTF-8 不超过 512 字节")
+		if !utf8.ValidString(password) {
+			return "", errors.New("密码中含有无法识别的字符，请重新输入")
+		}
+		if utf8.RuneCountInString(password) < 10 {
+			return "", errors.New("密码太短，请至少输入10个字符")
+		}
+		return "", errors.New("密码太长，最多可输入128个字符")
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {

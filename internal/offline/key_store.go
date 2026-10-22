@@ -122,7 +122,7 @@ func DecryptContainer(raw []byte, passphrase string) (KeyContainer, ed25519.Priv
 }
 func encryptIdentity(passphrase string) (KeyContainer, ed25519.PrivateKey, error) {
 	if !auth.ValidPassword(passphrase) {
-		return KeyContainer{}, nil, identityError("签发密码须为 10 至 128 个字符")
+		return KeyContainer{}, nil, identityError("签发密码需要10到128个字符")
 	}
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

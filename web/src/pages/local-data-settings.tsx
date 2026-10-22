@@ -2,7 +2,7 @@ import {useEffect,useState,type FormEvent} from "react"
 import {Button} from "@/components/ui/button"
 import {Input} from "@/components/ui/input"
 import {Label} from "@/components/ui/label"
-import {Dialog,DialogContent,DialogHeader,DialogTitle} from "@/components/ui/dialog"
+import {Dialog,DialogContent,DialogBody,DialogHeader,DialogTitle} from "@/components/ui/dialog"
 import {localDownload,localFileRequest,localRequest} from "@/lib/local-offline-api"
 
 type Summary={customers:number;licenses:number;originals:number;keyId:string;mappings:{kind:string;code:string;sourceId:string;targetId:string}[]}
@@ -38,7 +38,7 @@ export default function LocalDataSettings({onImported}:{onImported:()=>void}){
  return <section className="grid gap-5 rounded-xl border bg-card p-6" data-testid="data-settings"><h2 className="text-lg font-semibold">备份与移交</h2>
   <div className="flex flex-wrap gap-3"><Button disabled={busy} onClick={()=>{setNotice("");setMode("backup")}}>备份资料</Button><Button variant="outline" disabled={busy} onClick={()=>void perform(async()=>{await localDownload("/admin/business-bundle/export","蜗牛管理数据.snailbundle",{});setNotice("管理数据包已生成")})}>导出管理数据</Button><Button variant="outline" disabled={busy} onClick={()=>{setNotice("");setMode("bundle")}}>导入管理数据</Button><Button variant="outline" disabled={busy} onClick={()=>{setNotice("");setMode("restore")}}>恢复备份</Button></div>
   {!mode&&error&&<div role="alert" className="text-destructive">{error}</div>}{notice&&<div role="status">{notice}</div>}
-  <Dialog open={mode!==""} onOpenChange={open=>{if(!open)void close()}}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl" onInteractOutside={event=>event.preventDefault()} onEscapeKeyDown={event=>{if(busy)event.preventDefault()}}><DialogHeader><DialogTitle>{mode==="backup"?"备份资料":mode==="bundle"?"导入管理数据":"恢复备份"}</DialogTitle></DialogHeader>
+  <Dialog open={mode!==""} onOpenChange={open=>{if(!open)void close()}}><DialogContent className="lc-dialog sm:max-w-2xl" onInteractOutside={event=>event.preventDefault()} onEscapeKeyDown={event=>{if(busy)event.preventDefault()}}><DialogHeader><DialogTitle>{mode==="backup"?"备份资料":mode==="bundle"?"导入管理数据":"恢复备份"}</DialogTitle></DialogHeader><DialogBody>
    <form className="grid gap-5" onSubmit={submit}>
     {mode!=="backup"&&!preview&&<div className="grid gap-2"><Label htmlFor="management-file">{mode==="bundle"?"管理数据包":"加密备份文件"}</Label><Input id="management-file" type="file" accept={mode==="bundle"?".snailbundle":".snailbackup"} required disabled={busy} onChange={e=>setFile(e.target.files?.[0]||null)}/></div>}
     {(mode==="backup"||(mode==="restore"&&!preview))&&<div className="grid gap-2"><Label htmlFor="backup-password">备份密码</Label><Input id="backup-password" type="password" value={password} autoComplete="off" disabled={busy} required onChange={e=>setPassword(e.target.value)}/></div>}
@@ -49,7 +49,7 @@ export default function LocalDataSettings({onImported}:{onImported:()=>void}){
     {error&&<div role="alert" className="text-destructive">{error}</div>}
     <div className="flex justify-end gap-3"><Button type="button" variant="outline" disabled={busy} onClick={()=>void close()}>取消</Button><Button disabled={busy} type="submit">{busy?"正在处理…":mode==="backup"?"生成备份":!preview?"验证并预览":mode==="bundle"?"确认导入管理数据":"确认恢复并重新登录"}</Button></div>
    </form>
-  </DialogContent></Dialog>
+  </DialogBody></DialogContent></Dialog>
  </section>
 }
 export function LocalOperationHistory({epoch}:{epoch:number}){

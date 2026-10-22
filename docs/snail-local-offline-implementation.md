@@ -133,3 +133,16 @@ Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证
 修复准备：本机已有VS2022 Community，按微软可再发行目录复制正式x64 CRT 14.44.35211，十个DLL原始签名Valid（Microsoft），固定版本及SHA256进入desktop/native-runtime.lock.json；package.cjs强制要求、校验输入及包内字节，附原微软许可，放数据库程序同目录。不是从System32复制或要求用户安装C++环境。另下载签名有效的新版14.51运行库仅作调查，其最终用户条款与VS分发授权须区分；本包选择VS2022既有正式Redist目录，未采用新版临时提取物。尚未把整改后的正式包判通过。
 
 误落宿主壳目录的本任务空window-profile已核对完整路径、创建时间、无既有资料/链接及无运行进程后清理，原始失败目录中保留清单。其他Windows沙盒、客户端、工作树和资料没有被关闭或清理。
+
+
+## 2026-10-23 管理端界面整改（原型落实）
+
+用户实际截图暴露原客户页将标题、查询和主操作混在一行、表格黑色边框、空列表仍显示无效分页等问题。此前原生运行及签发用例通过，仅能证明这些动作成立，不能作为界面已完成的依据。
+
+本次改动范围：`web/src/pages/local-offline.tsx`、`local-offline.css`、`local-customers.tsx`、`local-licenses.tsx`、`local-issue.tsx`、`local-signing.tsx`、`local-data-settings.tsx`。以设计包 `界面截图/02_客户管理.png` 为布局依据，实现固定侧栏、页头、独立主操作、列表内工具栏、浅色表头和细边框；客户名称允许换行，空数据不显示无效翻页。档案、授权、交付、设置共用本地主题；长弹窗接入现有 DialogBody，关闭按钮保留在固定区域。未移植原型业务、安全或签发 JS。
+
+密码策略保持原值：10至128个 Unicode 字符，UTF-8不超过512字节。后端 `internal/auth/password.go` 与 `internal/offline/key_store.go` 改为普通中文错误，不再把编码和字节数展示给用户；创建密码输入框只提示“至少10个字符”。正式签发身份、现有资料和权限均未变更。
+
+源码原生验证第一轮：`node --test desktop/local-offline.spec.cjs`，1/1通过，22.83秒。任务隔离根 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-RCQ0cJ`；覆盖首次短密码拒绝且保留商家资料、无邮箱建客户、档案、1120×720窗口、签发下载原字节校验、手动交付、续期换机、备份恢复、同身份移交续期及正常关闭重开。已查看空列表、非空列表、最小窗口、档案、发放表单和签发设置的真实原生截图。后续小幅调整焦点轮廓、文字对比和重复标题后，需再次验证并核对新的实际管理包；本段不证明新包已交付或用户当前窗口已升级。
+
+最终源码界面复核：第二轮同一原生用例1/1通过，23.11秒，隔离根 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-3EFsU9`；此前第一轮证据保留。Go `TestPasswordHash` 与 `TestEncryptedSigningIdentityLifecycle` 各通过。生产前端类型及构建通过（存在既有 bundle 大于500KB提示）。新管理包将另行记录包哈希及沙盒验证，不覆盖原交付目录。
