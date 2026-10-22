@@ -111,3 +111,14 @@ cmd/server/client_bridge_test.go 扩展到两个独立初始化的合成管理�
 新增正常停止命令：第二实例仅请求原窗口正常退出，不启动新的数据库、不强杀。main.cjs 也等待正在启动的服务，退出途中不另开窗口。原生窗口流程扩展实际调用停止入口，PG状态确认已停止；本次3/3通过（22.4秒），证据 C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-wgVRm3。第一稿仅测试变量 stopped 与本文件既有变量重名，Node语法检查失败；已改为 managerStopped 后实际全流程通过，未改产品行为迎合测试。
 
 Windows沙盒预检已真实执行：联网和剪贴板等关闭，仅映射本任务公开验收程序与输出目录，来宾实际MachineGuid的用途摘要与宿主不同，来宾22621、WDAGUtilityAccount，完成后正常关机。证据 D:/snail-worktrees/commercial-licensing-windows-acceptance-20261023/sandbox-probe-0e3d9a3e92b84f7f8306cfd0513bb949/output/probe.json；此证据只证明独立设备测试环境可用，不证明安装包通过。
+
+
+### T10 首包实际启动失败与隔离纠正（未通过）
+
+首包5eccbe5已构建，ZIP SHA256 5dc4f6f216beff73efad7dddeef8ae95758c5f4dc5293dcc9ec261044519eb66，仅为待验候选，未交付或发布。包日志发现EDB bin还有stackbuilder.exe，后续改为五个实际命令及DLL白名单，lib仅运行DLL。
+
+首个packaged-offline实际程序验证失败：CDP已打印监听地址但WebSocket连接30秒超时；无参启动也无窗口。主进程及一子进程存在，无Go/PG，资料根仅有window-profile。正常停止也失败，确认准确EXE/PID后终止本任务测试进程，保留原失败；不能归因为缺少等待、RAM或数据库，当前根因未决。后续在源码增加无秘密的stderr阶段标记，定位profile/lock/ready，不放宽超时或断言。
+
+测试隔离错误：Electron Windows app.getPath(appData)按系统壳路径，不跟随APPDATA测试环境变量；本次在真实壳路径 C:/Users/Administrator/AppData/Roaming/SnailLicenseCenter 新建了空window-profile（创建时间04:55:21）。没有runtime.json、数据库、owner、客户或签发身份。该空目录为本次测试残留，记录后按归属清理；不将环境变量伪隔离当成有效隔离。正式管理包后续测试限定真实Windows沙盒，核对WDAGUtilityAccount和实际MachineGuid摘要不同于宿主后才启动，使用来宾真实默认目录；不会触碰宿主正式资料。首个失败证据 C:/Users/Administrator/AppData/Local/Temp/snail-manager-package-idQi5d。
+
+Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证据足以归因为等待/RAM .05；整体完成 .02。结果仅帮助核查，非测试通过。

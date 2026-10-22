@@ -3,18 +3,22 @@ const { app, BrowserWindow, dialog, shell } = require('electron');
 const path = require('node:path');
 const { startRuntime } = require('./runtime.cjs');
 app.setName('蜗牛客户与授权中心');
+process.stderr.write('MANAGER_STAGE name-set\n');
 const dataRoot = app.isPackaged ? path.join(app.getPath('appData'), 'SnailLicenseCenter') : process.env.SNAIL_MANAGER_DEV_DATA;
 if (!dataRoot || !path.isAbsolute(dataRoot)) throw new Error('开发运行必须指定本任务隔离资料目录。');
 app.setPath('userData', path.join(dataRoot, 'window-profile'));
+process.stderr.write('MANAGER_STAGE profile-set\n');
 let window, runtime, starting = false, closing = false, shutdownComplete = false;
 const stopRequested = process.argv.includes('--snail-stop');
 const primary = app.requestSingleInstanceLock();
+process.stderr.write(`MANAGER_STAGE instance-lock ${primary}\n`);
 if (!primary || stopRequested) app.quit();
 app.on('second-instance', (_event, argv) => {
   if (argv.includes('--snail-stop')) { app.quit(); return; }
   if (window) { if (window.isMinimized()) window.restore(); window.focus(); }
 });
 const startup = app.whenReady().then(async () => {
+  process.stderr.write('MANAGER_STAGE app-ready\n');
   if (!primary || stopRequested) return;
   starting = true;
   const serverRoot = app.isPackaged ? path.join(process.resourcesPath, 'server') : path.resolve(__dirname, '..');
