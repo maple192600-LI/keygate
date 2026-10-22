@@ -133,6 +133,51 @@ func TestGoNodeBidirectional(t *testing.T) {
 	if err != nil || got.LicenseID != p.LicenseID {
 		t.Fatalf("Go rejected Node: %v", err)
 	}
+	requestRaw := fixture(t, "TEST_ONLY.request-v2.snailreq")
+	var req Request
+	_ = json.Unmarshal(requestRaw, &req)
+	req.DeviceLabel = "合成\u2028设备\u2029😀"
+	req.AppVersion = "1.0\u2028"
+	requestRaw, _ = compactJSON(req)
+	_, fingerprint, err := ParseRequest(requestRaw, ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := exec.Command("node", "-e", `const fs=require('node:fs'),p=require(process.argv[1]);process.stdout.write(p.request(fs.readFileSync(0)).fingerprint)`, module)
+	check.Stdin = bytes.NewReader(requestRaw)
+	nodeFingerprint, err := check.CombinedOutput()
+	if err != nil || string(nodeFingerprint) != fingerprint {
+		t.Fatalf("Unicode request fingerprints differ: Go %s Node %s %v", fingerprint, nodeFingerprint, err)
+	}
+}
+
+func TestEquivalentJSONIntegers(t *testing.T) {
+	keys := mustTestKeys(t)
+	original := fixture(t, "TEST_ONLY.license-v2.snaillic")
+	for _, text := range []string{"2.0", "2e0", "20e-1"} {
+		raw := bytes.Replace(original, []byte(`"formatVersion":2`), []byte(`"formatVersion":`+text), 1)
+		if _, err := Verify(raw, keys, ProductID); err != nil {
+			t.Fatalf("integer-equivalent %s rejected: %v", text, err)
+		}
+	}
+	public, private, _ := ed25519.GenerateKey(rand.Reader)
+	p, _ := Verify(original, keys, ProductID)
+	p.KeyID = KeyID(public)
+	raw, _ := Sign(p, private)
+	var env Envelope
+	_ = json.Unmarshal(raw, &env)
+	payload, _ := canonicalBase64(env.PayloadB64)
+	for _, text := range []string{"1.0", "1e0", "1.0000000000000000001", "9007199254740991.1"} {
+		changed := bytes.Replace(payload, []byte(`"revision":1`), []byte(`"revision":`+text), 1)
+		env.PayloadB64 = encode64(changed)
+		env.SignatureB64 = encode64(ed25519.Sign(private, append(append([]byte{}, signatureDomain...), changed...)))
+		file, _ := compactJSON(env)
+		_, err := Verify(file, map[string]ed25519.PublicKey{p.KeyID: public}, ProductID)
+		valid := text == "1.0" || text == "1e0"
+		if (err == nil) != valid {
+			t.Fatalf("revision %s accepted=%v", text, err == nil)
+		}
+	}
 }
 
 func TestTermFixtures(t *testing.T) {

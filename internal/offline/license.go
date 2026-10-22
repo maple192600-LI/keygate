@@ -12,7 +12,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -220,6 +223,41 @@ func decodeObject(raw []byte, limit int, target any, names ...string) (map[strin
 	obj, err := exactFields(data, names...)
 	if err != nil {
 		return nil, err
+	}
+	// JSON Schema integers are numeric values: 2, 2.0 and 2e0 are the
+	// same integer. Preserve exact decimal semantics before decoding the
+	// Go struct; neither overflow nor floating-point rounding may grant a
+	// different revision.
+	for _, name := range []string{"formatVersion", "revision"} {
+		value, exists := obj[name]
+		if !exists {
+			continue
+		}
+		number, ok := value.(json.Number)
+		if !ok {
+			return nil, invalid("文件数字必须是安全整数")
+		}
+		approx, err := strconv.ParseFloat(string(number), 64)
+		if err != nil || math.IsInf(approx, 0) || math.IsNaN(approx) || math.Trunc(approx) != approx || math.Abs(approx) > 9007199254740991 {
+			return nil, invalid("文件数字必须是安全整数")
+		}
+		if approx == 0 {
+			coefficient, _, _ := strings.Cut(strings.ToLower(string(number)), "e")
+			if strings.Trim(coefficient, "-+.0") != "" {
+				return nil, invalid("文件数字不能通过舍入变成整数")
+			}
+			obj[name] = int64(0)
+			continue
+		}
+		rational, ok := new(big.Rat).SetString(string(number))
+		if !ok || !rational.IsInt() || !rational.Num().IsInt64() {
+			return nil, invalid("文件数字必须是安全整数")
+		}
+		integer := rational.Num().Int64()
+		if integer < -9007199254740991 || integer > 9007199254740991 {
+			return nil, invalid("文件数字超出安全整数范围")
+		}
+		obj[name] = integer
 	}
 	// Also reject case-insensitive field aliases accepted by encoding/json.
 	normalized, err := json.Marshal(obj)
