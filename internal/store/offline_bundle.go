@@ -138,7 +138,17 @@ func (s *Store) ExportBusinessBundle(ctx context.Context, public offline.PublicI
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(b)
+	return encodeBusinessBundle(b)
+}
+func encodeBusinessBundle(b *BusinessBundle) ([]byte, error) {
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > BundleLimit {
+		return nil, &offline.Error{Code: "BUNDLE_TOO_LARGE", Message: "管理移交包超过本期本地文件大小限制"}
+	}
+	return raw, nil
 }
 func ParseBusinessBundle(raw []byte) (*BusinessBundle, error) {
 	if _, err := offline.StrictJSON(raw, BundleLimit); err != nil {

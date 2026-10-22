@@ -14,13 +14,14 @@ import (
 )
 
 type Config struct {
-	Port              string
-	Environment       string
-	BaseURL           string
-	SnailDeployment   string
-	SnailDataDir      string
-	SnailIdentityDir  string
-	SnailRuntimeToken string
+	Port                     string
+	Environment              string
+	BaseURL                  string
+	SnailDeployment          string
+	SnailDataDir             string
+	SnailIdentityDir         string
+	SnailRuntimeToken        string
+	SnailRuntimeConfigSHA256 string
 
 	DatabaseURL string
 
@@ -118,13 +119,14 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Port:              envOr("PORT", "9000"),
-		Environment:       envOr("ENVIRONMENT", "development"),
-		BaseURL:           envOr("BASE_URL", "http://localhost:9000"),
-		SnailDeployment:   os.Getenv("SNAIL_DEPLOYMENT"),
-		SnailDataDir:      os.Getenv("SNAIL_DATA_DIR"),
-		SnailIdentityDir:  envOr("SNAIL_IDENTITY_DIR", os.Getenv("SNAIL_DATA_DIR")),
-		SnailRuntimeToken: os.Getenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN"),
+		Port:                     envOr("PORT", "9000"),
+		Environment:              envOr("ENVIRONMENT", "development"),
+		BaseURL:                  envOr("BASE_URL", "http://localhost:9000"),
+		SnailDeployment:          os.Getenv("SNAIL_DEPLOYMENT"),
+		SnailDataDir:             os.Getenv("SNAIL_DATA_DIR"),
+		SnailIdentityDir:         envOr("SNAIL_IDENTITY_DIR", os.Getenv("SNAIL_DATA_DIR")),
+		SnailRuntimeToken:        os.Getenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN"),
+		SnailRuntimeConfigSHA256: os.Getenv("SNAIL_RUNTIME_CONFIG_SHA256"),
 
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 

@@ -2,8 +2,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { randomBytes, createHmac, timingSafeEqual } = require('node:crypto');
+const { randomBytes, createHmac, createHash, timingSafeEqual } = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
+const runtimeConfigDigest = Symbol('runtimeConfigDigest');
 
 function directory(target) {
   fs.mkdirSync(target, { recursive: true });
@@ -33,12 +34,14 @@ async function freePort(preferred) {
 function readSecrets(file) {
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw new Error('运行配置文件不完整，请保留资料并恢复经验证的备份。');
-  const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const raw = fs.readFileSync(file);
+  const value = JSON.parse(raw.toString('utf8'));
   if (value.formatVersion !== 1 || !['databasePassword', 'jwtSecret', 'encryptionSecret'].every(key => /^[a-f0-9]{64}$/.test(value[key]))
       || ![value.databasePort, value.appPort].every(port => Number.isInteger(port) && port > 1024 && port < 65536) || value.databasePort === value.appPort
       || (value.databaseName !== undefined && !/^(snail_license_center|snail_restore_[a-f0-9]{32})$/.test(value.databaseName))
       || (value.identityDirectory !== undefined && !/^restores\/[a-f0-9-]{36}$/.test(value.identityDirectory)))
     throw new Error('运行秘密配置无效，请保留原文件，不要重新初始化已有资料。');
+  Object.defineProperty(value, runtimeConfigDigest, { value: createHash('sha256').update(raw).digest('hex') });
   return value;
 }
 async function secrets(dataRoot) {
@@ -116,6 +119,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   try {
     child = spawn(serverExecutable, [], { cwd: serverRoot, windowsHide: true, stdio: ['ignore', log, log], env: { ...process.env,
       SNAIL_DEPLOYMENT: 'local_offline', SNAIL_DATA_DIR: dataRoot, SNAIL_RUNTIME_SHUTDOWN_TOKEN: shutdownToken,
+      SNAIL_RUNTIME_CONFIG_SHA256: config[runtimeConfigDigest],
       SNAIL_IDENTITY_DIR: path.resolve(dataRoot, config.identityDirectory || '.'),
       ENVIRONMENT: 'production', PORT: String(config.appPort), BASE_URL: address,
       DATABASE_URL: `postgres://snail_runtime:${config.databasePassword}@127.0.0.1:${config.databasePort}/${databaseName}?sslmode=disable`,

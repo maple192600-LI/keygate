@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -100,6 +101,10 @@ func persistRestoreSelection(previous, next *config.Config, databaseName string)
 	if err != nil {
 		return err
 	}
+	digest := sha256.Sum256(raw)
+	if previous.SnailRuntimeConfigSHA256 != hex.EncodeToString(digest[:]) {
+		return &offline.Error{Code: "RESTORE_RUNTIME_INVALID", Message: "运行配置已变化，未切换现有资料"}
+	}
 	if _, err = offline.StrictJSON(raw, 16384); err != nil {
 		return err
 	}
@@ -150,5 +155,7 @@ func persistRestoreSelection(previous, next *config.Config, databaseName string)
 		return err
 	}
 	published = true
+	digest = sha256.Sum256(updated)
+	next.SnailRuntimeConfigSHA256 = hex.EncodeToString(digest[:])
 	return nil
 }

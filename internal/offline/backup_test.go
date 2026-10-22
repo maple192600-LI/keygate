@@ -3,6 +3,7 @@ package offline
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -47,5 +48,31 @@ func TestBackupEncryptionPurposeAndStrictParameters(t *testing.T) {
 				t.Fatal("invalid backup accepted")
 			}
 		})
+	}
+}
+
+func TestBackupAcceptedBoundaryCanBeOpened(t *testing.T) {
+	// This was accepted by the former plain-text cutoff but produced an outer
+	// file larger than the reader's 128 MiB limit. Check real bytes, not a mock.
+	plain := bytes.Repeat([]byte("x"), BackupLimit*3/4-128)
+	password := "Synthetic-boundary-backup-password"
+	if raw, err := SealBackup(plain, password); err == nil || raw != nil {
+		t.Fatal("unreadable boundary backup was exported")
+	}
+	raw, err := SealBackup(plain[:backupPlainLimit], password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > BackupLimit {
+		t.Fatal("export exceeds restore limit", len(raw))
+	}
+	opened, err := OpenBackup(raw, password)
+	if err != nil || !bytes.Equal(opened, plain[:backupPlainLimit]) {
+		t.Fatal("accepted boundary cannot roundtrip", err)
+	}
+	var failure *Error
+	_, err = SealBackup(plain, password)
+	if !errors.As(err, &failure) || failure.Code != "BACKUP_TOO_LARGE" {
+		t.Fatal("missing explicit size error", err)
 	}
 }

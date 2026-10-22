@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/tabloy/keygate/internal/config"
 	"github.com/tabloy/keygate/internal/service"
@@ -73,6 +75,8 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	cfg := &config.Config{Port: port, BaseURL: "http://" + address, Environment: "production", SnailDeployment: "local_offline", SnailDataDir: dataRoot, SnailRuntimeToken: strings.Repeat("c", 64), JWTSecret: strings.Repeat("b", 64), ReleaseKeyEncryptionKey: strings.Repeat("a", 64), DatabaseURL: dsn.String()}
 	runtime := map[string]any{"formatVersion": 1, "databasePassword": strings.Repeat("d", 64), "databasePort": 55437, "appPort": 9000, "jwtSecret": cfg.JWTSecret, "encryptionSecret": cfg.ReleaseKeyEncryptionKey}
 	initial, _ := json.Marshal(runtime)
+	initialDigest := sha256.Sum256(initial)
+	cfg.SnailRuntimeConfigSHA256 = hex.EncodeToString(initialDigest[:])
 	runtimeFile := filepath.Join(dataRoot, "runtime.json")
 	if err = os.WriteFile(runtimeFile, initial, 0600); err != nil {
 		t.Fatal(err)
@@ -182,21 +186,32 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	}
 	// An unexpected runtime configuration must prevent publication; source still
 	// has both customers and its current password/session remains usable.
-	runtime["jwtSecret"] = strings.Repeat("e", 64)
-	changed, _ := json.Marshal(runtime)
-	if err = os.WriteFile(runtimeFile, changed, 0600); err != nil {
-		t.Fatal(err)
-	}
 	confirm := map[string]string{"previewId": restore.ID, "ownerPassword": newPassword}
-	if status, _ = a.call(t, "POST", "/api/v1/admin/backups/restore", confirm); status == 200 {
-		t.Fatal("runtime conflict did not prevent switch")
-	}
-	if status, _ = a.call(t, "GET", "/api/v1/auth/me", nil); status != 200 {
-		t.Fatal("failed restore revoked current session")
-	}
 	var count int
-	if err = s.DB.NewRaw("SELECT count(*) FROM commercial_customers").Scan(context.Background(), &count); err != nil || count != 2 {
-		t.Fatal("failed restore changed source", count, err)
+	for _, field := range []string{"jwtSecret", "databasePassword", "databasePort", "identityDirectory"} {
+		var changedRuntime map[string]any
+		_ = json.Unmarshal(initial, &changedRuntime)
+		switch field {
+		case "databasePort":
+			changedRuntime[field] = 55438
+		case "identityDirectory":
+			changedRuntime[field] = "restores/ca51470a-2a89-4d6e-a1ee-93dd073ca5b0"
+		default:
+			changedRuntime[field] = strings.Repeat("e", 64)
+		}
+		changed, _ := json.Marshal(changedRuntime)
+		if err = os.WriteFile(runtimeFile, changed, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if status, _ = a.call(t, "POST", "/api/v1/admin/backups/restore", confirm); status == 200 {
+			t.Fatalf("%s conflict did not prevent switch", field)
+		}
+		if status, _ = a.call(t, "GET", "/api/v1/auth/me", nil); status != 200 {
+			t.Fatalf("%s conflict revoked current session", field)
+		}
+		if err = s.DB.NewRaw("SELECT count(*) FROM commercial_customers").Scan(context.Background(), &count); err != nil || count != 2 {
+			t.Fatal("failed restore changed source", field, count, err)
+		}
 	}
 	if err = os.WriteFile(runtimeFile, initial, 0600); err != nil {
 		t.Fatal(err)
@@ -242,6 +257,10 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	_ = json.Unmarshal(raw, &saved)
 	if saved["databaseName"] == nil || saved["identityDirectory"] == nil || saved["jwtSecret"] == cfg.JWTSecret {
 		t.Fatal("restore not persisted for native next launch")
+	}
+	savedDigest := sha256.Sum256(raw)
+	if managed.cfg.SnailRuntimeConfigSHA256 != hex.EncodeToString(savedDigest[:]) {
+		t.Fatal("next restore does not use newly published runtime digest")
 	}
 	if err = managed.owned[len(managed.owned)-1].DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity='backup' AND entity_id=? AND action='restore'", restore.ID).Scan(context.Background(), &count); err != nil || count != 1 {
 		t.Fatal("restore retry duplicated audit", count, err)

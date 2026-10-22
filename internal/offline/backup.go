@@ -26,6 +26,9 @@ type BackupContainer struct {
 
 const BackupLimit = 128 * 1024 * 1024
 
+// Reserve room for the AEAD tag, base64 expansion and the complete JSON header.
+const backupPlainLimit = BackupLimit*3/4 - 1024
+
 var backupAAD = []byte("snail-full-backup/v1\x00")
 
 func backupError() error {
@@ -35,7 +38,7 @@ func SealBackup(plain []byte, password string) ([]byte, error) {
 	if !auth.ValidPassword(password) {
 		return nil, &Error{Code: "BACKUP_PASSWORD_INVALID", Message: "备份密码须为 10 至 128 个字符"}
 	}
-	if len(plain) > BackupLimit*3/4-128 {
+	if len(plain) > backupPlainLimit {
 		return nil, &Error{Code: "BACKUP_TOO_LARGE", Message: "备份超过本期本地文件大小限制"}
 	}
 	salt, nonce := make([]byte, 16), make([]byte, 12)
@@ -56,7 +59,14 @@ func SealBackup(plain []byte, password string) ([]byte, error) {
 		return nil, err
 	}
 	c := BackupContainer{1, "snail-full-backup", "argon2id/v19", 65536, 3, 1, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(nonce), base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nonce, plain, backupAAD))}
-	return json.Marshal(c)
+	raw, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > BackupLimit {
+		return nil, &Error{Code: "BACKUP_TOO_LARGE", Message: "备份超过本期本地文件大小限制"}
+	}
+	return raw, nil
 }
 func OpenBackup(raw []byte, password string) ([]byte, error) {
 	var c BackupContainer

@@ -83,3 +83,16 @@ Jev 节点真实调用：`jev-1.14.0` 对当前 T09 设计和证据判断 aligne
 固定候选收尾证据（T09源码，不是正式包）：最后一次相关 Go 验证包含完整 store 包、原生路由/签发、移交、完整备份、操作者迁移和恢复切换；最后的清理归属整改再次运行完整备份与恢复切换用例通过（5.726秒/3.177秒）。恢复操作以同一预览ID只记一条审计；运行配置发布失败后按原预览重试，不重复记“恢复”。该场景最后再次通过（2.927秒）。随后重建 Go 程序并实际执行 `node --test desktop/runtime.spec.cjs desktop/local-offline.spec.cjs`：3/3通过、无跳过，真实窗口场景22.687秒，证据根 `C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-523fhg`。保留该根、先前失败根及两个工程工作树，用于本包独立审查、跨仓补证和正式包构建；尚未到最终收尾清理阶段。
 
 本候选实际运行的 Go 程序 SHA-256：`9af2ba1855aa0d1a3e753bd969e9fe737f24b6f97096a3a736d64e02e28e2d0e`。该二进制位于任务工作树的忽略目录 `bin/`，未提交或发布。
+
+
+## T09 独立审查整改（2026-10-23）
+
+固定候选 75be626b543aaebd79f408d24b382b51da07a0d5 对 fc0e3ab6b29c4e95ba8e46236c7ded19903b44fc 的独立只读审查提出三项证实问题：P2 恢复发布遗漏数据库连接配置变化；P3 备份与业务移交导出可能超过自身读取上限。
+
+实际整改：desktop/runtime.cjs 从同一次读取的 runtime.json 原字节计算 SHA-256，经本次私有 Go 子进程环境传入；cmd/server/local_restore.go 在发布前核对完整摘要，发布后保存新摘要供再次恢复使用。摘要不进入网页、业务包或完整备份。配置冲突拒绝切换并保留当前资料与会话。internal/offline/backup.go 为 AES-GCM、Base64 与 JSON 留出边界并核对实际编码后长度；internal/store/offline_bundle.go 在发布最终业务包前核对同一 128MiB 上限，超限明确失败。
+
+实际验证：TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource 通过（3.639秒），分别修改格式合法的 jwtSecret、databasePassword、databasePort、identityDirectory，均拒绝；源库两名客户和会话保留，同预览恢复原配置后成功且恢复审计只有一条。TestBackup* 通过（1.990秒），含真实约96MiB边界字节的加密/解密回读，原会导出超限的长度明确拒绝。TestBusinessBundleExportRefusesUnreadableSize 通过（0.471秒）：真实序列化恰为128MiB可输出、多一字节拒绝。该序列化边界测试不冒充大数据库导入的性能验收。
+
+Go重新构建后，node --test desktop/runtime.spec.cjs desktop/local-offline.spec.cjs 实际3/3通过（25.9秒），证据 C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-GbZfIv；当前合成管理窗口备份恢复、关闭重开、移交续期全部执行。Go执行文件SHA256为9c2c1d35adbe68b6535bd32f76ebcb484c3178827a833d6d3a6ab631b66e30e2。源码已改，待整改定向独立复审；该记录不构成正式安装包验收。
+
+审查期间曾怀疑对不应有的在线关联记录删除/移走违反A19；复核原句后证据不足，审查撤回该项。未应用的额外保留迁移尝试已撤回，未修改既有迁移或数据。不为不存在的旧客户开发修复或迁移路径。
