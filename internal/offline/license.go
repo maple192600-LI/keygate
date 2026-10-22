@@ -34,6 +34,8 @@ var requestIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var keyPattern = regexp.MustCompile(`^lic-[0-9a-f]{64}$`)
 
+func ValidUUID4(value string) bool { return requestIDPattern.MatchString(value) }
+
 type Error struct {
 	Code    string
 	Message string

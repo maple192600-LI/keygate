@@ -14,9 +14,11 @@ import (
 )
 
 type Config struct {
-	Port        string
-	Environment string
-	BaseURL     string
+	Port            string
+	Environment     string
+	BaseURL         string
+	SnailDeployment string
+	SnailDataDir    string
 
 	DatabaseURL string
 
@@ -114,9 +116,11 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Port:        envOr("PORT", "9000"),
-		Environment: envOr("ENVIRONMENT", "development"),
-		BaseURL:     envOr("BASE_URL", "http://localhost:9000"),
+		Port:            envOr("PORT", "9000"),
+		Environment:     envOr("ENVIRONMENT", "development"),
+		BaseURL:         envOr("BASE_URL", "http://localhost:9000"),
+		SnailDeployment: os.Getenv("SNAIL_DEPLOYMENT"),
+		SnailDataDir:    os.Getenv("SNAIL_DATA_DIR"),
 
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 
@@ -179,7 +183,7 @@ func Load() (*Config, error) {
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
 	}
-	if cfg.LicenseSigningKey == "" {
+	if cfg.LicenseSigningKey == "" && !cfg.IsLocalOffline() {
 		return nil, fmt.Errorf("LICENSE_SIGNING_KEY is required")
 	}
 
@@ -190,7 +194,8 @@ func (c *Config) normalizedEnv() string {
 	return strings.ToLower(strings.TrimSpace(c.Environment))
 }
 
-func (c *Config) IsProduction() bool { return c.normalizedEnv() == "production" }
+func (c *Config) IsProduction() bool   { return c.normalizedEnv() == "production" }
+func (c *Config) IsLocalOffline() bool { return c.SnailDeployment == "local_offline" }
 
 // isLoopbackURL reports whether a URL points at this machine. Browsers
 // treat those as trustworthy even over plain HTTP, so a local trial
@@ -286,14 +291,14 @@ func (c *Config) ValidateSecurityDefaults() (warnings []string, fatal []string) 
 	// (64 chars). It signs the offline-verifiable license token that
 	// SDKs hand to desktop clients. Ed25519 + hex-encoded seed is the
 	// industry-standard format for env-var-style key distribution.
-	if seed, err := hex.DecodeString(strings.TrimSpace(c.LicenseSigningKey)); err != nil || len(seed) != 32 {
+	if seed, err := hex.DecodeString(strings.TrimSpace(c.LicenseSigningKey)); !c.IsLocalOffline() && (err != nil || len(seed) != 32) {
 		fatal = append(fatal,
 			"LICENSE_SIGNING_KEY must be a 32-byte ed25519 seed in hex (64 chars); generate with 'openssl rand -hex 32'")
 	}
 
 	if c.IsProduction() {
 		// Must have at least one admin
-		if len(c.AdminEmails) == 0 {
+		if len(c.AdminEmails) == 0 && !c.IsLocalOffline() {
 			warnings = append(warnings, "SECURITY: ADMIN_EMAILS is empty — no one can access the admin panel")
 		}
 		// Sessions ride a cookie. Over plain HTTP it travels in the
@@ -303,6 +308,24 @@ func (c *Config) ValidateSecurityDefaults() (warnings []string, fatal []string) 
 		// behind TLS.
 		if !strings.HasPrefix(strings.ToLower(c.BaseURL), "https://") && !isLoopbackURL(c.BaseURL) {
 			warnings = append(warnings, "SECURITY: BASE_URL is not https — session cookies travel unprotected; put TLS in front of Keygate")
+		}
+	}
+	if c.SnailDeployment != "" && !c.IsLocalOffline() {
+		fatal = append(fatal, "SNAIL_DEPLOYMENT is invalid")
+	}
+	if c.IsLocalOffline() {
+		if !c.IsProduction() {
+			fatal = append(fatal, "本地管理端必须使用 production 配置")
+		}
+		u, err := url.Parse(c.BaseURL)
+		if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() != c.Port || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			fatal = append(fatal, "本地管理端地址必须是 http://127.0.0.1:PORT")
+		}
+		if c.RedisURL != "" || c.SMTPHost != "" || c.StripeSecretKey != "" || c.IsStorageEnabled() {
+			fatal = append(fatal, "本地离线模式不得配置在线服务")
+		}
+		if !c.IsMasterEncryptionKeyConfigured() {
+			fatal = append(fatal, "请通过启动器生成并保存运行数据加密秘密")
 		}
 	}
 

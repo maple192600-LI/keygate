@@ -12,13 +12,16 @@ import (
 type User struct {
 	bun.BaseModel `bun:"table:users"`
 
-	ID        string    `bun:",pk" json:"id"`
-	Email     string    `bun:",notnull,unique" json:"email"`
-	Name      string    `json:"name"`
-	AvatarURL string    `json:"avatar_url,omitempty"`
-	Role      string    `bun:",notnull,default:'user'" json:"role"` // owner | admin | user
-	CreatedAt time.Time `bun:",nullzero,default:now()" json:"created_at"`
-	UpdatedAt time.Time `bun:",nullzero,default:now()" json:"updated_at"`
+	ID           string    `bun:",pk" json:"id"`
+	Email        string    `bun:",nullzero,unique" json:"email"`
+	Username     string    `bun:",nullzero" json:"username,omitempty"`
+	PasswordHash string    `bun:",nullzero" json:"-"`
+	AuthVersion  int64     `bun:",notnull,default:1" json:"-"`
+	Name         string    `json:"name"`
+	AvatarURL    string    `json:"avatar_url,omitempty"`
+	Role         string    `bun:",notnull,default:'user'" json:"role"` // owner | admin | user
+	CreatedAt    time.Time `bun:",nullzero,default:now()" json:"created_at"`
+	UpdatedAt    time.Time `bun:",nullzero,default:now()" json:"updated_at"`
 }
 
 // IsAdmin returns true if the user has admin or owner role.
@@ -299,11 +302,17 @@ const FeedPublicMaxAge = 60 * time.Second
 type License struct {
 	bun.BaseModel `bun:"table:licenses"`
 
-	ID        string `bun:",pk" json:"id"`
-	ProductID string `bun:",notnull" json:"product_id"`
-	PlanID    string `bun:",notnull" json:"plan_id"`
-	UserID    string `bun:",nullzero" json:"user_id,omitempty"`
-	Email     string `bun:",notnull" json:"email"`
+	ID                string `bun:",pk" json:"id"`
+	ProductID         string `bun:",notnull" json:"product_id"`
+	PlanID            string `bun:",notnull" json:"plan_id"`
+	UserID            string `bun:",nullzero" json:"user_id,omitempty"`
+	Email             string `bun:",nullzero" json:"email"`
+	CustomerID        string `bun:",nullzero" json:"customer_id,omitempty"`
+	FulfillmentMode   string `bun:",notnull,default:'online'" json:"fulfillment_mode"`
+	IssuanceEnabled   bool   `bun:",notnull,default:true" json:"issuance_enabled"`
+	CurrentRevision   int64  `bun:",notnull,default:0" json:"current_revision"`
+	CurrentIssuanceID string `bun:",nullzero" json:"current_issuance_id,omitempty"`
+	DisplayNumber     string `bun:",nullzero" json:"display_number,omitempty"`
 	// JSON-hidden on purpose. The key is a credential — it activates
 	// the product — so it must not ride along in every payload that
 	// happens to contain a license. The three places that legitimately

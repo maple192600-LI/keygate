@@ -20,6 +20,7 @@ const STORAGE_KEY = "keygate_locale"
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => {
+    if (import.meta.env.VITE_SNAIL_DEPLOYMENT === "local_offline") return "zh"
     const saved = localStorage.getItem(STORAGE_KEY) as Locale
     if (saved && locales[saved]) return saved
     const browserLang = navigator.language.toLowerCase()

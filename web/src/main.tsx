@@ -8,6 +8,7 @@ import { showToast, ToastBridge, ToastProvider } from "@/components/toast"
 import { AuthProvider } from "@/hooks/use-auth"
 import { SiteConfigProvider } from "@/hooks/use-site-config"
 import { I18nProvider } from "@/i18n"
+import LocalOfflineApp from "@/pages/local-offline"
 import AcceptInvitePage from "@/pages/accept-invite"
 import AddonsPage from "@/pages/admin/addons"
 import AnalyticsPage from "@/pages/admin/analytics"
@@ -39,7 +40,10 @@ const queryClient = new QueryClient({
   },
 })
 
-createRoot(document.getElementById("root")!).render(
+if (import.meta.env.VITE_SNAIL_DEPLOYMENT === "local_offline") {
+  document.documentElement.classList.add("snail-local")
+  createRoot(document.getElementById("root")!).render(<StrictMode><I18nProvider><LocalOfflineApp /></I18nProvider></StrictMode>)
+} else createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>

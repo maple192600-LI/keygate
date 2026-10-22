@@ -1,0 +1,9 @@
+.snail-local {
+  --color-primary: #356ae6;
+  --color-primary-foreground: #ffffff;
+  --color-background: #f7f7f8;
+  --color-card: #ffffff;
+  --color-foreground: #252529;
+  --color-ring: #356ae6;
+  font-size: 14px;
+}
