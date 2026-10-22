@@ -40,7 +40,7 @@ const startup = app.whenReady().then(async () => {
     callback({ requestHeaders: headers });
   });
   await window.loadURL(runtime.address);
-}).finally(() => { starting = false; }).catch(error => { dialog.showErrorBox('管理端未能启动', `${error.message}\n现有资料保留。`); app.quit(); });
+}).finally(() => { starting = false; }).catch(error => { process.stderr.write(`MANAGER_START_FAILED ${error.name} ${error.code||'none'} ${error.cause?.code||'none'}\n`); dialog.showErrorBox('管理端未能启动', `${error.message}\n现有资料保留。`); app.quit(); });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', event => {
   if (shutdownComplete || (!runtime && !starting)) return;

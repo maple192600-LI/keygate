@@ -18,11 +18,14 @@ function systemExe(name) {
   return path.join(root, 'System32', name);
 }
 function secureDirectory(target) {
+  process.stderr.write('MANAGER_STAGE acl-start\n');
   if (process.platform !== 'win32') throw new Error('本管理客户端仅支持 Windows。');
   const user = execFileSync(systemExe('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
+  process.stderr.write('MANAGER_STAGE acl-identity-read\n');
   const sid = /S-1-\d+(?:-\d+)+/.exec(user)?.[0];
   if (!sid) throw new Error('无法取得本机资料访问身份。');
   execFileSync(systemExe('icacls.exe'), [target, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`], { windowsHide: true, stdio: 'pipe' });
+  process.stderr.write('MANAGER_STAGE acl-done\n');
 }
 async function freePort(preferred) {
   return new Promise((resolve, reject) => {
@@ -46,6 +49,7 @@ function readSecrets(file) {
 }
 async function secrets(dataRoot) {
   directory(dataRoot); secureDirectory(dataRoot);
+  process.stderr.write('MANAGER_STAGE secrets-root-ready\n');
   const file = path.join(dataRoot, 'runtime.json');
   if (fs.existsSync(file)) return readSecrets(file);
   if (fs.existsSync(path.join(dataRoot, 'postgres'))) throw new Error('已有数据库但运行秘密缺失，请恢复配套备份；不能自动换密码。');
