@@ -20,12 +20,59 @@ function systemExe(name) {
 function secureDirectory(target) {
   process.stderr.write('MANAGER_STAGE acl-start\n');
   if (process.platform !== 'win32') throw new Error('本管理客户端仅支持 Windows。');
-  const user = execFileSync(systemExe('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
-  process.stderr.write('MANAGER_STAGE acl-identity-read\n');
-  const sid = /S-1-\d+(?:-\d+)+/.exec(user)?.[0];
-  if (!sid) throw new Error('无法取得本机资料访问身份。');
+  const sid = currentUserSID();
   execFileSync(systemExe('icacls.exe'), [target, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`], { windowsHide: true, stdio: 'pipe' });
   process.stderr.write('MANAGER_STAGE acl-done\n');
+}
+function currentUserSID() {
+  const user = execFileSync(systemExe('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
+  const sid = /S-1-\d+(?:-\d+)+/.exec(user)?.[0];
+  if (!sid) throw new Error('无法取得本机资料访问身份。');
+  return sid;
+}
+function privateMappingDirectory(target, sid) {
+  try { fs.lstatSync(target); throw new Error('运行辅助路径已经存在，已停止使用。'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const literal = value => "'" + value.replaceAll("'", "''") + "'";
+  const script = `$ErrorActionPreference='Stop'; $p=${literal(target)}; $sid=${literal(sid)};
+$security=New-Object System.Security.AccessControl.DirectorySecurity;
+$security.SetSecurityDescriptorSddlForm(('O:'+ $sid +'D:P(A;OICI;FA;;;'+ $sid +')'));
+[System.IO.Directory]::CreateDirectory($p,$security) | Out-Null;
+if (([System.IO.File]::GetAttributes($p) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {throw 'Unexpected link'};
+$actual=[System.IO.Directory]::GetAccessControl($p); $rules=$actual.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]);
+if ($actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid -or -not $actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid -or $rules[0].AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or $rules[0].FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {throw 'Unexpected directory owner or access rules'};`;
+  try { execFileSync(systemExe('WindowsPowerShell/v1.0/powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'pipe', timeout: 10000 }); }
+  catch (cause) { throw new Error('无法安全创建数据库辅助路径，请保留资料并联系支持。', { cause }); }
+  directory(target);
+}
+function nativePostgresPaths(dataRoot, postgresRoot) {
+  // PostgreSQL's Windows bootstrap emits native-codepage installation paths
+  // into UTF-8 SQL. ASCII junctions retain all original program and data paths.
+  const common = process.env.ProgramData;
+  if (!common || !path.isAbsolute(common) || /[^\x20-\x7e]/.test(common) || !fs.statSync(common).isDirectory())
+    throw new Error('系统公共资料路径无法用于数据库启动，请保留资料并联系支持。');
+  const sid = currentUserSID(), aliases = path.join(common, `SnailLicenseCenter-${sid}-${randomBytes(16).toString('hex')}`);
+  privateMappingDirectory(aliases, sid);
+  const targets = [['data', dataRoot], ['postgresql', postgresRoot]];
+  for (const [name, target] of targets) {
+    const alias = path.join(aliases, name);
+    fs.symlinkSync(target, alias, 'junction');
+    if (fs.realpathSync.native(alias).toLowerCase() !== fs.realpathSync.native(target).toLowerCase())
+      throw new Error('数据库路径映射验证失败；现有资料保留。');
+  }
+  let released = false;
+  return { dataRoot: path.join(aliases, 'data'), postgresRoot: path.join(aliases, 'postgresql'), release() {
+    if (released) return;
+    const entries = fs.readdirSync(aliases).sort();
+    if (entries.length !== 2 || entries[0] !== 'data' || entries[1] !== 'postgresql') throw new Error('运行辅助路径出现未知对象，已保留目录。');
+    for (const [name, target] of targets) {
+      const alias = path.join(aliases, name);
+      if (!fs.lstatSync(alias).isSymbolicLink() || fs.realpathSync.native(alias).toLowerCase() !== fs.realpathSync.native(target).toLowerCase())
+        throw new Error('运行辅助路径发生变化，已保留目录。');
+    }
+    for (const [name] of targets) fs.unlinkSync(path.join(aliases, name));
+    fs.rmdirSync(aliases); released = true;
+  } };
 }
 async function freePort(preferred) {
   process.stderr.write('MANAGER_STAGE port-request\n');
@@ -91,16 +138,17 @@ async function waitForHealth(address, child, token, deadline = 30000) {
   throw new Error('本地管理服务未能就绪，请查看运行日志；现有资料保留。');
 }
 
-async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable }) {
+async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable, nativePaths = false }) {
   // No database process or web service may start before these secrets exist.
   const config = await secrets(dataRoot);
   process.stderr.write('MANAGER_STAGE config-ready\n');
-  const cluster = path.join(dataRoot, 'postgres');
+  const native = nativePaths ? nativePostgresPaths(dataRoot, postgresRoot) : { dataRoot, postgresRoot };
+  const cluster = path.join(native.dataRoot, 'postgres');
   const logs = path.join(dataRoot, 'logs'); directory(logs);
-  const pg = name => path.join(postgresRoot, 'bin', `${name}.exe`);
+  const pg = name => path.join(native.postgresRoot, 'bin', `${name}.exe`);
   if (!fs.existsSync(path.join(cluster, 'PG_VERSION'))) {
     if (fs.existsSync(cluster) && fs.readdirSync(cluster).length) throw new Error('数据库初始化尚未完成，请保留资料并联系支持；不会清空目录。');
-    const passwordFile = path.join(dataRoot, `init-${randomBytes(16).toString('hex')}.tmp`);
+    const passwordFile = path.join(native.dataRoot, `init-${randomBytes(16).toString('hex')}.tmp`);
     fs.writeFileSync(passwordFile, config.databasePassword, { flag: 'wx', mode: 0o600 });
     const initializationLog = fs.openSync(path.join(logs, 'initialization.log'), 'a', 0o600);
     try { process.stderr.write('MANAGER_STAGE initdb-start\n'); execute(pg('initdb'), ['-D', cluster, '-U', 'snail_runtime', '--pwfile', passwordFile, '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--encoding=UTF8', '--locale=C'], { stdio: ['ignore', initializationLog, initializationLog], timeout: 30000 }); process.stderr.write('MANAGER_STAGE initdb-done\n'); }
@@ -110,8 +158,19 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   try { execFileSync(pg('pg_ctl'), ['status', '-D', cluster], { windowsHide: true, stdio: 'ignore' }); running = true; } catch (error) { if (error.status !== 3) throw new Error('无法确认本机数据库状态，请保留资料并检查运行日志。'); }
   // On Windows pg_ctl's detached postgres child can inherit captured pipe
   // handles even with -l. No captured pipes may outlive this startup command.
-  if (!running) execute(pg('pg_ctl'), ['start', '-D', cluster, '-l', path.join(logs, 'postgres.log'), '-o', `-h 127.0.0.1 -p ${config.databasePort} -c timezone=UTC`, '-w', '-t', '20'], { stdio: 'ignore' });
-  let stop = async () => execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
+  if (!running) execute(pg('pg_ctl'), ['start', '-D', cluster, '-l', path.join(native.dataRoot, 'logs', 'postgres.log'), '-o', `-h 127.0.0.1 -p ${config.databasePort} -c timezone=UTC`, '-w', '-t', '20'], { stdio: 'ignore' });
+  let databaseStopped = false;
+  function stopDatabase() {
+    if (!databaseStopped) {
+      let running = true;
+      try { execFileSync(pg('pg_ctl'), ['status', '-D', cluster], { windowsHide: true, stdio: 'ignore' }); }
+      catch (error) { if (error.status !== 3) throw error; running = false; }
+      if (running) execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
+      databaseStopped = true;
+    }
+    native.release?.();
+  }
+  let stop = async () => stopDatabase();
   try {
   const databaseArgs = ['-h', '127.0.0.1', '-p', String(config.databasePort), '-U', 'snail_runtime'];
   const databaseName = config.databaseName || 'snail_license_center';
@@ -148,10 +207,10 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
       let timer;
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('管理服务尚未正常关闭，请保留窗口并重试。')), 15000); })]).finally(() => clearTimeout(timer));
     }
-    execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
+    stopDatabase();
   };
   await waitForHealth(address, child, shutdownToken); if (spawnError) throw spawnError; ready = true;
   return { address, stop, setupToken: shutdownToken };
   } catch (error) { try { await stop(); } catch (shutdownError) { throw new AggregateError([error, shutdownError], '管理端启动及关闭失败，请保留运行日志与资料。'); }; throw error; }
 }
-module.exports = { startRuntime, secrets, waitForHealth };
+module.exports = { startRuntime, secrets, waitForHealth, nativePostgresPaths, privateMappingDirectory };

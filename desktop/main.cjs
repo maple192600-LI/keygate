@@ -23,7 +23,7 @@ const startup = app.whenReady().then(async () => {
   starting = true;
   const serverRoot = app.isPackaged ? path.join(process.resourcesPath, 'server') : path.resolve(__dirname, '..');
   const postgresRoot = app.isPackaged ? path.join(process.resourcesPath, 'postgresql') : process.env.SNAIL_MANAGER_DEV_POSTGRES;
-  runtime = await startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable: path.join(serverRoot, 'bin', 'snail-license-center.exe') });
+  runtime = await startRuntime({ dataRoot, postgresRoot, serverRoot, nativePaths: app.isPackaged, serverExecutable: path.join(serverRoot, 'bin', 'snail-license-center.exe') });
   process.stderr.write('MANAGER_STAGE runtime-ready\n');
   if (closing) return;
   window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1120, minHeight: 720, title: '蜗牛客户与授权中心', backgroundColor: '#f7f7f8',
