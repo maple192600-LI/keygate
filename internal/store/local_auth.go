@@ -45,7 +45,16 @@ func (s *Store) InitializeLocal(ctx context.Context, username, hash, siteName, c
 	})
 	return result, err
 }
+func EnsureOfflineActor(ctx context.Context, db bun.IDB, actor string) error {
+	_, err := db.NewRaw(`INSERT INTO offline_actors(id,display_name)
+ SELECT id,COALESCE(NULLIF(username,''),NULLIF(name,''),'历史操作者') FROM users WHERE id=?
+ ON CONFLICT(id) DO NOTHING`, actor).Exec(ctx)
+	return err
+}
 func LocalAuditIn(ctx context.Context, db bun.IDB, actor, entity, id, action string, changes map[string]any) error {
+	if err := EnsureOfflineActor(ctx, db, actor); err != nil {
+		return err
+	}
 	_, err := db.NewInsert().Model(&model.AuditLog{ID: NewID(), Entity: entity, EntityID: id, Action: action, ActorType: "user", ActorID: actor, Changes: changes}).Exec(ctx)
 	return err
 }

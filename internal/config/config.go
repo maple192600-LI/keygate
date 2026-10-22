@@ -19,6 +19,7 @@ type Config struct {
 	BaseURL           string
 	SnailDeployment   string
 	SnailDataDir      string
+	SnailIdentityDir  string
 	SnailRuntimeToken string
 
 	DatabaseURL string
@@ -122,6 +123,7 @@ func Load() (*Config, error) {
 		BaseURL:           envOr("BASE_URL", "http://localhost:9000"),
 		SnailDeployment:   os.Getenv("SNAIL_DEPLOYMENT"),
 		SnailDataDir:      os.Getenv("SNAIL_DATA_DIR"),
+		SnailIdentityDir:  envOr("SNAIL_IDENTITY_DIR", os.Getenv("SNAIL_DATA_DIR")),
 		SnailRuntimeToken: os.Getenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN"),
 
 		DatabaseURL: os.Getenv("DATABASE_URL"),

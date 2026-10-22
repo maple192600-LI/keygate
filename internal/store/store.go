@@ -929,13 +929,20 @@ func (s *Store) updateLicenseAndSubscription(ctx context.Context, lic *model.Lic
 }
 
 func updateLicenseAndSubscriptionIn(ctx context.Context, tx bun.Tx, lic *model.License, stillLinked bool, asOf *time.Time, cols ...string) error {
+	var mode string
+	if err := tx.NewRaw("SELECT fulfillment_mode FROM licenses WHERE id=? FOR UPDATE", lic.ID).Scan(ctx, &mode); err != nil {
+		return err
+	}
+	if mode != "online" {
+		return errors.New("offline_file licenses require signed issuance lifecycle")
+	}
 	lic.UpdatedAt = time.Now()
 	allCols := append(append([]string{}, cols...), "updated_at")
 	if asOf != nil {
 		lic.StripeSyncedAt = asOf
 		allCols = append(allCols, "stripe_synced_at")
 	}
-	q := tx.NewUpdate().Model(lic).Column(allCols...).WherePK()
+	q := tx.NewUpdate().Model(lic).Column(allCols...).WherePK().Where("fulfillment_mode='online'")
 	guarded := stillLinked && lic.StripeSubscriptionID != ""
 	if guarded {
 		q = q.Where("stripe_subscription_id = ?", lic.StripeSubscriptionID)
@@ -1274,6 +1281,7 @@ func (s *Store) CountActivations(ctx context.Context, licenseID string) (int, er
 func (s *Store) FindExpiringLicenses(ctx context.Context, from, to time.Time) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").
 		Relation("Plan").
 		Where("license.status IN ('active', 'trialing')").
@@ -1304,6 +1312,7 @@ func (s *Store) Audit(ctx context.Context, log *model.AuditLog) {
 func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").Relation("Plan").
 		Where("license.status IN ('active', 'past_due')").
 		Where("license.valid_until IS NOT NULL").
@@ -1316,6 +1325,7 @@ func (s *Store) FindLicensesForGraceExpiry(ctx context.Context) ([]*model.Licens
 func (s *Store) FindExpiredTrials(ctx context.Context) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").Relation("Plan").
 		Where("license.status = 'trialing'").
 		Where("license.valid_until IS NOT NULL").
@@ -1331,6 +1341,7 @@ func (s *Store) FindExpiredTrials(ctx context.Context) ([]*model.License, error)
 func (s *Store) FindStalePastDueLicenses(ctx context.Context, before time.Time) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Where("status = 'past_due'").
 		Where("COALESCE(past_due_at, updated_at) < ?", before).
 		Scan(ctx)
@@ -1341,7 +1352,7 @@ func (s *Store) FindStalePastDueLicenses(ctx context.Context, before time.Time) 
 func (s *Store) DeleteExpiredActivations(ctx context.Context) (int, error) {
 	res, err := s.DB.NewDelete().
 		TableExpr("activations").
-		Where("license_id IN (SELECT id FROM licenses WHERE status IN ('expired', 'revoked'))").
+		Where("license_id IN (SELECT id FROM licenses WHERE fulfillment_mode='online' AND status IN ('expired', 'revoked'))").
 		Exec(ctx)
 	if err != nil {
 		return 0, err
@@ -1355,7 +1366,7 @@ func (s *Store) SyncSubscriptionStatuses(ctx context.Context) error {
 	_, err := s.DB.NewRaw(`
 		UPDATE subscriptions SET status = l.status, updated_at = now()
 		FROM licenses l
-		WHERE subscriptions.license_id = l.id
+		WHERE subscriptions.license_id = l.id AND l.fulfillment_mode='online'
 		AND subscriptions.status != l.status
 		AND l.status IN ('expired', 'canceled', 'revoked')
 	`).Exec(ctx)
@@ -1379,6 +1390,7 @@ const cancelStateSQL = `(SELECT sub.cancel_at_period_end FROM subscriptions sub
 func (s *Store) FindLicensesForExpiryReminder(ctx context.Context, from, to time.Time) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").
 		Relation("Plan").
 		Where("license.status IN ('active', 'trialing')").
@@ -1397,6 +1409,7 @@ func (s *Store) FindLicensesForExpiryReminder(ctx context.Context, from, to time
 func (s *Store) FindLicensesForRenewalReminder(ctx context.Context, from, to time.Time) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").
 		Where("license.status = 'active'").
 		Where("COALESCE(license.stripe_subscription_id, '') <> ''").
@@ -1448,7 +1461,7 @@ func (s *Store) RecordSubscriptionCancelStateIfUnknown(ctx context.Context, lice
 func (s *Store) setCancelState(ctx context.Context, licenseID string, scheduled bool, asOf time.Time, onlyIfUnknown bool) error {
 	return RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
 		var locked []string
-		if err := tx.NewRaw(`SELECT id FROM licenses WHERE id = ? FOR UPDATE`, licenseID).Scan(ctx, &locked); err != nil {
+		if err := tx.NewRaw(`SELECT id FROM licenses WHERE id = ? AND fulfillment_mode='online' FOR UPDATE`, licenseID).Scan(ctx, &locked); err != nil {
 			return err
 		}
 		if len(locked) == 0 {
@@ -2119,7 +2132,7 @@ func (s *Store) ActivateWithinLimit(ctx context.Context, act *model.Activation, 
 	defer tx.Rollback()
 
 	// Lock the license row to serialize concurrent activations
-	_, err = tx.NewRaw("SELECT id FROM licenses WHERE id = ? FOR UPDATE", act.LicenseID).Exec(ctx)
+	_, err = tx.NewRaw("SELECT id FROM licenses WHERE id = ? AND fulfillment_mode='online' FOR UPDATE", act.LicenseID).Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -2937,6 +2950,7 @@ func SetLicenseUpdatesUntilIn(ctx context.Context, tx bun.IDB, licenseID string,
 func (s *Store) FindLicensesWithUpdatesEnding(ctx context.Context, from, to time.Time) ([]*model.License, error) {
 	var out []*model.License
 	err := s.DB.NewSelect().Model(&out).
+		Where("license.fulfillment_mode = 'online'").
 		Relation("Product").
 		Relation("Plan").
 		Where("license.status = 'active'").

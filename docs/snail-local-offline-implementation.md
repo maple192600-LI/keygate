@@ -12,7 +12,7 @@
 
 | 工作包 | 实际路径 | 已验证行为 | 尚未完成 |
 | --- | --- | --- | --- |
-| T03 | `desktop/`、`cmd/server/local_offline.go`、`internal/auth/`、`internal/{handler,store}/local_auth.go`、本地认证迁移 | 先生成运行秘密，再 initdb；隔离原生 PostgreSQL 启停；无邮箱 owner、原子唯一初始化、登录/改密/会话撤销、Host/Origin、路由隔离 | 正式管理包、一键入口的安装验证；原生在线数据方法逐项防护 |
+| T03 | `desktop/`、`cmd/server/local_offline.go`、`internal/auth/`、`internal/{handler,store}/local_auth.go`、本地认证迁移 | 先生成运行秘密，再 initdb；隔离原生 PostgreSQL 启停；无邮箱 owner、原子唯一初始化、登录/改密/会话撤销、Host/Origin、路由隔离 | 正式管理包、一键入口的安装验证；数据层防护见后文 A19 |
 | T04 | `customers.go`、`offline_requests.go`、商业表迁移、`web/src/pages/local-customers.tsx` | 无邮箱客户、同名独立 UUID、来源回读、严格申请及完整设备码、重复申请与冲突 | 最终整体页面验收 |
 | T05 | `internal/offline/key_store.go`、`internal/service/offline_issuance.go`、对应 handler/store、`local-signing.tsx`、`local-issue.tsx` | Argon2id/AES-GCM 加密身份、Ed25519 原字节签发、事务原件、同操作号并发、锁定及签名/归档/审计后失败无半成品、超过 24 小时原操作重放、原件下载 | 最终独立审查及真实正式身份交接 |
 | T07 | `offline_lifecycle.go`、`offline_deliveries.go`、`local-licenses.tsx`、`local-overview.tsx`、`local-state-form.tsx` | 续期/永久/换机/停发恢复、最新版本交付独立状态、原件历史、当前及历史设备、使用显示未回传、客户/授权查询与概览 | 最终 P0 场景、复制说明和身份移交完整验收 |
@@ -35,7 +35,7 @@ Windows `pg_ctl start` 捕获标准流会因后台数据库继承管道而挂起
 
 ## 后续依赖
 
-客户端 T08 仍须逐项审查 history 写方法及到期保护；T09 完整加密备份/恢复、空实例业务移交及历史操作者快照尚未实现；T10 两个正式 Windows 包、用户控制的正式身份、原生安装、真实不同 MachineGuid 验证尚未完成；最后固定候选执行完整检查、独立审查和第 13 节 P0。现阶段不能用于真实商业客户交付。
+客户端 T08 已有独立源码候选和真实到期流程证据，见客户端任务记录；T09 源码和原生窗口已实现并验证，仍待本包独立审查及原客户续期导入的跨仓补证；T10 两个正式 Windows 包、用户控制的正式身份、原生安装、真实不同 MachineGuid 验证尚未完成；最后固定候选执行完整检查、独立审查和第 13 节 P0。现阶段不能用于真实商业客户交付。
 
 
 ## T03/T07 独立审查整改
@@ -52,3 +52,34 @@ Windows `pg_ctl start` 捕获标准流会因后台数据库继承管道而挂起
 真实原生管理窗口：`node --test desktop/local-offline.spec.cjs` 1/1（11.7秒），证据 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-nIbggl`。先从窗口之外发同源外观的 setup 请求，实际403；再经正常 UI 首次设置、无邮箱客户、创建隔离签发身份、签发、下载后由 Node v2验证、登记交付、续期、停发恢复、换机及改永久，点击有效卡实际选中 active 并显示永久记录；关闭 PG 确认停止，重开秘密原字节不变，客户档案停发/恢复后表格与按钮同步。新增永久显示断言首次命中期限和截止两个单元格，已改为明确核对两个，不使用 first/强制点击/额外重试。
 
 此记录为源码及原生开发窗口证据，仍非正式包；首次设置对另一 SID 的拒绝以不持启动能力的外部进程请求验证，尚未建立第二真实 Windows 账号做安装验证。T08 在客户端独立候选中验证，管理业务备份/移交和正式双设备安装交付继续待 T09/T10。旧在线到期/订阅写方法的数据库级 offline_file 排除仍待后续 P0 验证，不能仅以本地模式未注册任务代替该项。
+
+
+## T09 备份与移交、A19 数据层收口
+
+实际修改：`internal/store/offline_bundle.go`、`internal/store/offline_snapshot.go`、`internal/store/offline_write.go`、`internal/service/offline_backup.go`、`internal/handler/offline_backup.go`、`internal/offline/backup.go`、`internal/handler/local_write_gate.go`、`cmd/server/local_restore.go`、本地路由、`desktop/runtime.cjs`、`web/src/pages/local-data-settings.tsx` 和本地 API。迁移 `20261024_snail_actor_history` 将历史操作者快照与登录用户分开；`20261025_snail_offline_write_guard` 为离线授权设置事务写用途并阻止原生在线写入、用户绑定、激活、订阅、用量、席位、浮动会话、附加服务、计费、通知与原生维护期续费。签发、停发、bundle 和恢复分别只在对应事务使用明确用途，不由页面提供。保留在线记录的原行为。
+
+完整备份是版本化的数据快照：在管理写锁内对全部 public 数据表和序列做 PostgreSQL repeatable-read 读取，连同配套运行加密秘密、公开身份和经明确确认的可选加密身份，使用独立备份密码以固定 Argon2id/AES-256-GCM 参数整体加密。归档不含可执行 SQL；恢复只用安装程序的可信迁移建新库，严格核对迁移校验和、字段、关系、原件签名和摘要，并逐表回读。外键仅在新库事务中延后到提交前完整检查，随后恢复原约束属性，不禁用触发器。插入计划会产生的临时时间历史仅在新候选中按快照ID剔除，源库及签发/交付原件从不改写。迁移元数据的应用时间采用目标新库的实际建库时间；业务表、原件和历史时间保持快照值。
+
+确认恢复后，先撤销候选中原会话、增加 owner 的 auth_version，再原子发布受保护运行配置并切换同一监听器的处理器；新请求使用新库和新 JWT 秘密。旧库保留，未发布成功时继续使用原库和原会话。重开由原生启动器读取已选数据库与身份目录。未包含身份的备份仍有公开身份，后续只允许导入同一身份。
+
+业务包以固定表词汇导出完整产品/计划定义、权益、商业客户、申请、授权、设备历史、签发原件（raw_bytes 的 PostgreSQL 十六进制表示）、SHA-256、交付、管理操作和操作者快照。禁止登录凭据和私钥，内部 KG 码在新库重新生成并以新库秘密加密。产品和计划按合同代码/固定 slug 及定义映射；其余商业 UUID 和 revision 原值保留。预览回滚不写商业数据，确认时重新验证空实例条件，在一个事务中导入，失败整体回滚。
+
+实际验证：
+
+- 任务专属 PostgreSQL 下，`go test ./cmd/server ./internal/service ./internal/offline ./internal/handler ./internal/auth ./internal/config -run '^(TestLocalOffline|TestOffline|TestBackupEncryption|TestLocalWriteGate|TestPassword|TestLocalPassword)' -count=1` 通过。数据库场景未跳过；专用 Electron 跨仓桥接另行执行，不作为普通 Go 命令的替代。
+- 业务移交测试：不同 owner、不同运行加密秘密的空实例；保留客户/授权/申请/设备/原件/交付/历史操作者ID；原件同字节同 SHA；客户及授权停发的 false 保留；恢复续发后同一身份签出下一版、独立核对原截止加7天。hash、最高版本、外键、计划定义和未知字段错误均拒绝且没有半成品；非空目标拒绝。
+- 完整备份测试：随机加密不同字节、用途/参数/未知字段/重复字段拒绝；错误密码、密文损坏、配套配置、错误关联及无效管理密码哈希拒绝；包含/不包含身份两种备份均验证；失败和取消确认源数据及候选清理结果。
+- 恢复 HTTP 测试：备份后新增第二客户并改管理密码，预览仍为原1客户；故意改变运行配置使发布失败，原2客户及当前会话保留；恢复后实际返回原1客户、原密码，旧 JWT/刷新令牌拒绝，原数据库仍有2客户，运行配置持久保存新目标。
+- 迁移测试：从先前 T03/T07 的合成数据快照建旧版 schema，再升级操作者与离线写防护迁移；原文件字节、摘要及 created_by 不变，历史名称正确补齐。不是旧客户迁移器。
+- A19：原生到期、停用、撤销、改期限、恢复、用户关联、激活、订阅及 Stripe 邮箱写入直接调用不能改变离线整行元数据，原件仍一致。原在线 SetLicenseValidUntil/Reinstate/Expire 定向正向测试通过；增加对所有原生在线子记录的保护后，在另建隔离库完整运行 `go test ./internal/store -count=1` 通过（14.494秒），并确认库清理成功。
+- `node --test desktop/runtime.spec.cjs` 既有挑战身份场景；本包原生窗口实际测试 `node --test desktop/local-offline.spec.cjs` 通过。完整源窗口：创建客户、4版签发、交付、状态、商家保存、导出2版快照、勾选及确认带身份备份、错误密码保留输入、恢复至2版、旧会话重新登录、关闭重开、另一空实例导入、单独身份导入/解锁、续出第3版并由 Node v2独立验签。最新证据根及结果见固定候选收尾段；移交后的最近操作同时显示来源操作者快照和新实例操作者，未将历史操作者导入为登录账号。
+
+真实窗口发现商家 GET 读取结果可能覆盖已输入内容，已在读取完成前禁用编辑和保存，再实测持久保存与重开。测试曾误把恢复后新建立的合法会话当成必须再次登录，以及未等待目标 setup 结束就给旧表单填登录密码；已按实际会话合同和可见登录状态修正测试，没有增加重试或强制点击。原失败根保留供审查。
+
+Jev 节点真实调用：`jev-1.14.0` 对当前 T09 设计和证据判断 aligned 0.76、drift 0.15、insufficient 0.09，confidence 0.64；“可宣称全部完成”为0.07。输入719、输出59 tokens。该结果只指导核查，不替代实际测试和独立审查；未宣称持续后台监控。
+
+限制及下一依赖：当前导入格式按当前迁移版本严格验证，最大128 MiB；不是跨任意版本的通用迁移平台。原客户客户端导入移交后续期文件还需补跨仓实测；正式管理包、客户安装包、用户掌握的正式身份、不同 MachineGuid Windows 安装及最终P0仍待 T10/T11。中文操作说明已写入 `docs/蜗牛客户与授权中心_本地操作说明.md`，包路径与哈希在正式交付时固定。
+
+固定候选收尾证据（T09源码，不是正式包）：最后一次相关 Go 验证包含完整 store 包、原生路由/签发、移交、完整备份、操作者迁移和恢复切换；最后的清理归属整改再次运行完整备份与恢复切换用例通过（5.726秒/3.177秒）。恢复操作以同一预览ID只记一条审计；运行配置发布失败后按原预览重试，不重复记“恢复”。该场景最后再次通过（2.927秒）。随后重建 Go 程序并实际执行 `node --test desktop/runtime.spec.cjs desktop/local-offline.spec.cjs`：3/3通过、无跳过，真实窗口场景22.687秒，证据根 `C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-523fhg`。保留该根、先前失败根及两个工程工作树，用于本包独立审查、跨仓补证和正式包构建；尚未到最终收尾清理阶段。
+
+本候选实际运行的 Go 程序 SHA-256：`9af2ba1855aa0d1a3e753bd969e9fe737f24b6f97096a3a736d64e02e28e2d0e`。该二进制位于任务工作树的忽略目录 `bin/`，未提交或发布。

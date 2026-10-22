@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/offline"
 	"github.com/tabloy/keygate/internal/service"
 	"github.com/tabloy/keygate/internal/store"
@@ -107,6 +109,63 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 	if count != 2 || replays != 1 {
 		t.Fatalf("count=%d replay=%d", count, replays)
+	}
+	// Online lifecycle helpers must refuse even an otherwise qualifying
+	// offline row; the original signed deadline and status stay unchanged.
+	var beforeOnlineRow string
+	if err = a.store.DB.NewRaw("SELECT row_to_json(l)::text FROM licenses l WHERE id=?", result.LicenseID).Scan(context.Background(), &beforeOnlineRow); err != nil {
+		t.Fatal(err)
+	}
+	beforeOnline := time.Now().Add(365 * 24 * time.Hour)
+	if changed, err := a.store.ExpireLicenseIf(context.Background(), result.LicenseID, []string{"active"}, &beforeOnline); err != nil || changed {
+		t.Fatalf("online expiry touched offline file: %v %v", changed, err)
+	}
+	if err := a.store.SuspendLicense(context.Background(), result.LicenseID); err == nil {
+		t.Fatal("online suspend accepted offline file")
+	}
+	if err := a.store.RevokeLicense(context.Background(), result.LicenseID); err == nil {
+		t.Fatal("online revoke accepted offline file")
+	}
+	if _, _, err := a.store.SetLicenseValidUntil(context.Background(), result.LicenseID, &beforeOnline); err == nil {
+		t.Fatal("online date edit accepted offline file")
+	}
+	if err := a.store.SyncSubscriptionStatuses(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var actorID, planID string
+	if err = a.store.DB.NewRaw("SELECT id FROM users WHERE username='issuing_owner'").Scan(context.Background(), &actorID); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.store.DB.NewRaw("SELECT plan_id FROM licenses WHERE id=?", result.LicenseID).Scan(context.Background(), &planID); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.store.UpdateLicenseUser(context.Background(), result.LicenseID, actorID); err == nil {
+		t.Fatal("online user binding accepted offline license")
+	}
+	if err = a.store.CreateActivation(context.Background(), &model.Activation{LicenseID: result.LicenseID, Identifier: "synthetic-online-activation"}); err == nil {
+		t.Fatal("online activation accepted offline license")
+	}
+	if err = a.store.CreateSubscription(context.Background(), &model.Subscription{LicenseID: result.LicenseID, PlanID: planID, Status: "active"}); err == nil {
+		t.Fatal("online subscription accepted offline license")
+	}
+	if _, _, err = a.store.IncrementUsageCounterWithLimit(context.Background(), result.LicenseID, "api_calls", "monthly", "2026-10", 1, 100); err == nil {
+		t.Fatal("online usage write accepted offline license")
+	}
+	if _, err = a.store.ReinstateLicense(context.Background(), result.LicenseID); err == nil {
+		t.Fatal("online reinstate accepted offline license")
+	}
+	a.store.UpdateLicenseEmailByStripeCustomer(context.Background(), "", "must-not-save@example.invalid")
+	var afterOnlineRow string
+	if err = a.store.DB.NewRaw("SELECT row_to_json(l)::text FROM licenses l WHERE id=?", result.LicenseID).Scan(context.Background(), &afterOnlineRow); err != nil || beforeOnlineRow != afterOnlineRow {
+		t.Fatal("native writer changed offline metadata", err)
+	}
+	var actualStatus string
+	var actualUntil time.Time
+	if err := a.store.DB.NewRaw("SELECT status,valid_until FROM licenses WHERE id=?", result.LicenseID).Scan(context.Background(), &actualStatus, &actualUntil); err != nil {
+		t.Fatal(err)
+	}
+	if actualStatus != "active" || actualUntil.UTC().Format("2006-01-02T15:04:05.000Z") != expected {
+		t.Fatal("online lifecycle changed signed license metadata")
 	}
 	status, file := a.call(t, "GET", "/api/v1/admin/license-issuances/"+url.PathEscape(result.IssuanceID)+"/file", nil)
 	if status != 200 {

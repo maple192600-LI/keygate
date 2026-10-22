@@ -34,6 +34,9 @@ func (s *Store) RecordOfflineDelivery(ctx context.Context, row *OfflineDelivery)
 	var result *OfflineDelivery
 	replayed := false
 	err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+		if err := EnsureOfflineActor(ctx, tx, row.CreatedBy); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", row.OperationID); err != nil {
 			return err
 		}

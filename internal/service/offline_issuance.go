@@ -283,6 +283,12 @@ func (s *OfflineIssuanceService) Issue(ctx context.Context, actor string, comman
 	operationHash := hashJSON(command)
 	var result OfflineIssueResult
 	err = store.RunInTx(ctx, s.Store.DB, func(ctx context.Context, tx bun.Tx) error {
+		if err := store.EnsureOfflineActor(ctx, tx, actor); err != nil {
+			return err
+		}
+		if err := store.AllowOfflineWriteIn(ctx, tx, "issue"); err != nil {
+			return err
+		}
 		if _, err := tx.NewRaw("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", "snail-issuance:"+command.OperationID).Exec(ctx); err != nil {
 			return err
 		}

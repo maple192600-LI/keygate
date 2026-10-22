@@ -415,10 +415,10 @@ func (s *Store) FindLicenseByIDWithCounts(ctx context.Context, id string) (*mode
 }
 
 func (s *Store) RevokeLicense(ctx context.Context, id string) error {
-	_, _ = s.DB.NewDelete().Model((*model.Activation)(nil)).Where("license_id = ?", id).Exec(ctx)
+	_, _ = s.DB.NewDelete().Model((*model.Activation)(nil)).Where("license_id IN (SELECT id FROM licenses WHERE id=? AND fulfillment_mode='online')", id).Exec(ctx)
 	res, err := s.DB.NewUpdate().Model((*model.License)(nil)).
 		Set("status = ?, updated_at = ?", model.StatusRevoked, time.Now()).
-		Where("id = ?", id).Exec(ctx)
+		Where("id = ? AND fulfillment_mode='online'", id).Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -439,7 +439,7 @@ func (s *Store) SuspendLicense(ctx context.Context, id string) error {
 	now := time.Now()
 	res, err := s.DB.NewUpdate().Model((*model.License)(nil)).
 		Set("status = ?, suspended_at = ?, suspended_by = ?, updated_at = ?", model.StatusSuspended, now, model.SuspendedByAdmin, now).
-		Where("id = ?", id).
+		Where("id = ? AND fulfillment_mode='online'", id).
 		Where("status IN (?)", bun.In([]string{model.StatusActive, model.StatusTrialing, model.StatusPastDue})).
 		Exec(ctx)
 	if err != nil {
@@ -487,7 +487,7 @@ func (s *Store) ReinstateLicense(ctx context.Context, id string) (string, error)
 		err := tx.NewRaw(`
 			UPDATE licenses SET status = `+usableStatusSQL+`,
 				suspended_at = NULL, suspended_by = NULL, canceled_at = NULL, updated_at = now()
-			WHERE id = ? AND (status = 'suspended' OR
+			WHERE id = ? AND fulfillment_mode='online' AND (status = 'suspended' OR
 				(status IN ('expired', 'canceled') AND (valid_until IS NULL OR valid_until > now())))
 			RETURNING status`, id).Scan(ctx, &status)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -520,7 +520,7 @@ func (s *Store) SetLicenseValidUntil(ctx context.Context, id string, validUntil 
 		if err := tx.NewRaw(`
 			SELECT l.status, p.license_type, l.stripe_subscription_id FROM licenses l
 			LEFT JOIN plans p ON p.id = l.plan_id
-			WHERE l.id = ? FOR UPDATE OF l`, id).Scan(ctx, &prev, &licenseType, &stripeSub); err != nil {
+			WHERE l.id = ? AND l.fulfillment_mode='online' FOR UPDATE OF l`, id).Scan(ctx, &prev, &licenseType, &stripeSub); err != nil {
 			return err
 		}
 		// A trial issued here; a Stripe-billed licence's trial is
@@ -590,7 +590,7 @@ func (s *Store) expireLicenseWhere(ctx context.Context, id string, cond func(*bu
 		q := cond(tx.NewUpdate().Model((*model.License)(nil)).
 			Set("status = ?", model.StatusExpired).
 			Set("updated_at = now()").
-			Where("id = ?", id))
+			Where("id = ? AND fulfillment_mode='online'", id))
 		res, err := q.Exec(ctx)
 		if err != nil {
 			return err

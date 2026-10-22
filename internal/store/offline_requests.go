@@ -13,6 +13,9 @@ func (s *Store) ImportOfflineRequest(ctx context.Context, request *model.Offline
 	var saved *model.OfflineRequest
 	replayed := false
 	err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+		if err := EnsureOfflineActor(ctx, tx, request.CreatedBy); err != nil {
+			return err
+		}
 		result, err := tx.NewInsert().Model(request).On("CONFLICT(request_id) DO NOTHING").Exec(ctx)
 		if err != nil {
 			return err

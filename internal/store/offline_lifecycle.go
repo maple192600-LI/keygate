@@ -137,6 +137,9 @@ func (s *Store) SetOfflineIssuanceState(ctx context.Context, actor, kind, id str
 	fingerprint := hex.EncodeToString(sum[:])
 	var result map[string]any
 	err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+		if err := EnsureOfflineActor(ctx, tx, actor); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended(?,0))", "snail-state:"+command.OperationID); err != nil {
 			return err
 		}
@@ -164,6 +167,9 @@ func (s *Store) SetOfflineIssuanceState(ctx context.Context, actor, kind, id str
 		if kind == "license" {
 			table = "licenses"
 			where += " AND fulfillment_mode='offline_file'"
+			if err := AllowOfflineWriteIn(ctx, tx, "state"); err != nil {
+				return err
+			}
 		} else if kind != "customer" {
 			return errors.New("unsupported state target")
 		}

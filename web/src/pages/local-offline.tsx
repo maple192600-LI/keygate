@@ -9,6 +9,7 @@ import LocalSigningIdentity from "./local-signing"
 import LocalIssue from "./local-issue"
 import LocalLicenses,{type OfflineLicense} from "./local-licenses"
 import LocalOverview from "./local-overview"
+import LocalDataSettings,{MerchantSettings,LocalOperationHistory} from "./local-data-settings"
 
 const attribution = <a className="text-sm text-muted-foreground" href="https://keygate.app" target="_blank" rel="noreferrer">Powered by Keygate</a>
 function Field({ name, label, children }: { name: string; label: string; children: ReactNode }) { return <div className="grid gap-2"><Label htmlFor={name}>{label}</Label>{children}</div> }
@@ -47,7 +48,7 @@ export default function LocalOfflineApp() {
         {page==="customers"&&<LocalCustomers epoch={epoch} onIssue={customer=>setIssuing({customer})} onManage={manageLicense}/>}
         {(page==="licenses"||page==="delivery")&&<LocalLicenses key={`${page}-${expiring}-${termFilter}`} initialTermState={termFilter} delivery={page==="delivery"} initialExpiring={expiring} epoch={epoch} onCreate={createLicense} onManage={manageLicense}/>}
         {page==="overview"&&<LocalOverview onCreate={createLicense} onNavigate={(target,soon,term)=>{setPage(target);setExpiring(Boolean(soon));setTermFilter(term||"")}}/>}
-        {page==="settings"&&<div className="grid gap-6"><h1 className="text-xl font-semibold">设置</h1><AccountSettings onSignedOut={signedOut}/><details className="rounded-xl border bg-card"><summary className="cursor-pointer p-5 font-semibold">签发身份</summary><LocalSigningIdentity/></details></div>}
+        {page==="settings"&&<div className="grid gap-6"><h1 className="text-xl font-semibold">设置</h1><MerchantSettings/><AccountSettings onSignedOut={signedOut}/><details className="rounded-xl border bg-card"><summary className="cursor-pointer p-5 font-semibold">签发身份</summary><LocalSigningIdentity key={epoch}/></details><LocalDataSettings onImported={()=>setEpoch(value=>value+1)}/><LocalOperationHistory epoch={epoch}/></div>}
       </main>{issuing&&<LocalIssue customer={issuing.customer} existing={issuing.existing} onClose={()=>{setIssuing(null);setEpoch(value=>value+1)}} onSettings={()=>{setIssuing(null);setPage("settings")}}/>}
     </div>}
 

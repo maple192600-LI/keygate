@@ -11,6 +11,9 @@ func (s *Store) CreateOfflineLicenseIn(ctx context.Context, tx bun.Tx, l *model.
 	if l.FulfillmentMode != "offline_file" || l.CustomerID == "" || s.LicenseKeyAEAD == nil {
 		return errors.New("offline license storage is not configured")
 	}
+	if err := AllowOfflineWriteIn(ctx, tx, "issue"); err != nil {
+		return err
+	}
 	if err := s.prepareLicenseForInsert(l); err != nil {
 		return err
 	}

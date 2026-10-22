@@ -28,6 +28,10 @@ import (
 // The local runtime branches before constructing any online token service,
 // payment integration, analytics collection, email queue or scheduled expiry.
 func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func()) *gin.Engine {
+	router, _ := newManagedLocalRouter(cfg, db, nil, shutdown...)
+	return router
+}
+func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*service.RestoreCandidate) error, shutdown ...func()) (*gin.Engine, func(context.Context) error) {
 	master, err := hex.DecodeString(cfg.ReleaseKeyEncryptionKey)
 	if err != nil || len(master) != 32 {
 		panic("本地运行数据加密秘密无效")
@@ -82,10 +86,15 @@ func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func
 			shutdown[0]()
 		})
 	}
-	api := r.Group("/api/v1")
+	gate := handler.NewLocalWriteGate()
+	api := r.Group("/api/v1", gate.Middleware())
 	setup := handler.NewSetupHandler(db, nil)
 	local := handler.NewLocalAuthHandler(db, cfg.JWTSecret)
-	keys := offline.NewKeyStore(cfg.SnailDataDir)
+	identityDir := cfg.SnailIdentityDir
+	if identityDir == "" {
+		identityDir = cfg.SnailDataDir
+	}
+	keys := offline.NewKeyStore(identityDir)
 	local.OnSessionEnd = keys.Lock
 	api.GET("/setup/status", setup.Status)
 	api.GET("/config", func(c *gin.Context) {
@@ -139,15 +148,27 @@ func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func
 	owner.GET("/admin/offline-licenses/:id", lifecycle.Get)
 	owner.POST("/admin/offline-licenses/:id/issuance-state", lifecycle.State("license"))
 	owner.POST("/admin/commercial-customers/:id/issuance-state", lifecycle.State("customer"))
+	backups := &handler.OfflineBackupHandler{Service: &service.OfflineBackupService{Store: db, Keys: keys, DatabaseURL: cfg.DatabaseURL, DataDir: cfg.SnailDataDir, MigrationDir: "db/migrations", EncryptionSecret: cfg.ReleaseKeyEncryptionKey}, Gate: gate, Activate: activate}
+	owner.POST("/admin/business-bundle/export", backups.ExportBusiness)
+	owner.POST("/admin/business-bundle/preview", backups.PreviewBusiness)
+	owner.POST("/admin/business-bundle/import", backups.ConfirmBusiness)
+	owner.POST("/admin/backups", backups.Backup)
+	owner.POST("/admin/backups/preview", backups.PreviewRestore)
+	owner.POST("/admin/backups/restore", backups.ConfirmRestore)
+	owner.POST("/admin/data-previews/cancel", backups.Cancel)
+	owner.GET("/admin/local-settings", backups.Settings)
+	owner.PATCH("/admin/local-settings", backups.Settings)
+	owner.GET("/admin/local-operations", backups.Operations)
 	serveFrontend(r)
 	r.NoRoute(func(c *gin.Context) { response.Err(c, 404, "NOT_FOUND", "此本地功能入口不存在") })
-	return r
+	return r, func(ctx context.Context) error { keys.Lock(); return backups.Close(ctx) }
 }
-func runLocalOffline(cfg *config.Config, db *store.Store, logger *slog.Logger) error {
+func runLocalOffline(cfg *config.Config, db *store.Store, logger *slog.Logger) (resultErr error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	router := newLocalOfflineRouter(cfg, db, cancel)
-	server := &http.Server{Addr: "127.0.0.1:" + cfg.Port, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	managed := newLocalRouterSwitch(cfg, db, cancel)
+	defer func() { resultErr = errors.Join(resultErr, managed.Close()) }()
+	server := &http.Server{Addr: "127.0.0.1:" + cfg.Port, Handler: managed, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	logger.Info("蜗牛客户与授权中心已启动", "address", cfg.BaseURL, "deployment", "local_offline")

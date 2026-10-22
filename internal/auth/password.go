@@ -26,20 +26,31 @@ func HashPassword(password string) (string, error) {
 	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 1, 32)
 	return passwordPrefix + base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(key), nil
 }
-func VerifyPassword(encoded, password string) bool {
-	if !ValidPassword(password) || !strings.HasPrefix(encoded, passwordPrefix) {
-		return false
+func passwordParts(encoded string) ([]byte, []byte, bool) {
+	if !strings.HasPrefix(encoded, passwordPrefix) {
+		return nil, nil, false
 	}
 	pieces := strings.Split(strings.TrimPrefix(encoded, passwordPrefix), "$")
 	if len(pieces) != 2 {
-		return false
+		return nil, nil, false
 	}
 	salt, err := base64.RawStdEncoding.Strict().DecodeString(pieces[0])
 	if err != nil || len(salt) != 16 {
-		return false
+		return nil, nil, false
 	}
 	expected, err := base64.RawStdEncoding.Strict().DecodeString(pieces[1])
 	if err != nil || len(expected) != 32 {
+		return nil, nil, false
+	}
+	return salt, expected, true
+}
+func ValidPasswordHash(encoded string) bool { _, _, ok := passwordParts(encoded); return ok }
+func VerifyPassword(encoded, password string) bool {
+	if !ValidPassword(password) {
+		return false
+	}
+	salt, expected, ok := passwordParts(encoded)
+	if !ok {
 		return false
 	}
 	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 1, 32)

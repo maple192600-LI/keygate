@@ -35,7 +35,9 @@ function readSecrets(file) {
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384) throw new Error('运行配置文件不完整，请保留资料并恢复经验证的备份。');
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (value.formatVersion !== 1 || !['databasePassword', 'jwtSecret', 'encryptionSecret'].every(key => /^[a-f0-9]{64}$/.test(value[key]))
-      || ![value.databasePort, value.appPort].every(port => Number.isInteger(port) && port > 1024 && port < 65536) || value.databasePort === value.appPort)
+      || ![value.databasePort, value.appPort].every(port => Number.isInteger(port) && port > 1024 && port < 65536) || value.databasePort === value.appPort
+      || (value.databaseName !== undefined && !/^(snail_license_center|snail_restore_[a-f0-9]{32})$/.test(value.databaseName))
+      || (value.identityDirectory !== undefined && !/^restores\/[a-f0-9-]{36}$/.test(value.identityDirectory)))
     throw new Error('运行秘密配置无效，请保留原文件，不要重新初始化已有资料。');
   return value;
 }
@@ -99,9 +101,13 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   let stop = async () => execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
   try {
   const databaseArgs = ['-h', '127.0.0.1', '-p', String(config.databasePort), '-U', 'snail_runtime'];
+  const databaseName = config.databaseName || 'snail_license_center';
   const pgEnv = { ...process.env, PGPASSWORD: config.databasePassword };
-  const exists = execute(pg('psql'), [...databaseArgs, '-d', 'postgres', '-tAc', "SELECT 1 FROM pg_database WHERE datname='snail_license_center'"], { env: pgEnv });
-  if (exists.trim() !== '1') execute(pg('createdb'), [...databaseArgs, 'snail_license_center'], { env: pgEnv });
+  const exists = execute(pg('psql'), [...databaseArgs, '-d', 'postgres', '-tAc', `SELECT 1 FROM pg_database WHERE datname='${databaseName}'`], { env: pgEnv });
+  if (exists.trim() !== '1') {
+    if (config.databaseName) throw new Error('恢复后的数据库不存在，请保留运行配置和原资料，不要重新初始化。');
+    execute(pg('createdb'), [...databaseArgs, databaseName], { env: pgEnv });
+  }
   await freePort(config.appPort);
   const address = `http://127.0.0.1:${config.appPort}`;
   const shutdownToken = randomBytes(32).toString('hex');
@@ -110,8 +116,9 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   try {
     child = spawn(serverExecutable, [], { cwd: serverRoot, windowsHide: true, stdio: ['ignore', log, log], env: { ...process.env,
       SNAIL_DEPLOYMENT: 'local_offline', SNAIL_DATA_DIR: dataRoot, SNAIL_RUNTIME_SHUTDOWN_TOKEN: shutdownToken,
+      SNAIL_IDENTITY_DIR: path.resolve(dataRoot, config.identityDirectory || '.'),
       ENVIRONMENT: 'production', PORT: String(config.appPort), BASE_URL: address,
-      DATABASE_URL: `postgres://snail_runtime:${config.databasePassword}@127.0.0.1:${config.databasePort}/snail_license_center?sslmode=disable`,
+      DATABASE_URL: `postgres://snail_runtime:${config.databasePassword}@127.0.0.1:${config.databasePort}/${databaseName}?sslmode=disable`,
       JWT_SECRET: config.jwtSecret, RELEASE_KEY_ENCRYPTION_KEY: config.encryptionSecret,
       LICENSE_SIGNING_KEY: '', ADMIN_EMAILS: '', SMTP_HOST: '', SMTP_PASSWORD: '', REDIS_URL: '',
       STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', STORAGE_BUCKET: '', STORAGE_ACCESS_KEY: '', STORAGE_SECRET_KEY: '', STORAGE_ENDPOINT: '' } });
