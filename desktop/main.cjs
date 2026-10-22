@@ -24,9 +24,11 @@ const startup = app.whenReady().then(async () => {
   const serverRoot = app.isPackaged ? path.join(process.resourcesPath, 'server') : path.resolve(__dirname, '..');
   const postgresRoot = app.isPackaged ? path.join(process.resourcesPath, 'postgresql') : process.env.SNAIL_MANAGER_DEV_POSTGRES;
   runtime = await startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable: path.join(serverRoot, 'bin', 'snail-license-center.exe') });
+  process.stderr.write('MANAGER_STAGE runtime-ready\n');
   if (closing) return;
   window = new BrowserWindow({ width: 1440, height: 940, minWidth: 1120, minHeight: 720, title: '蜗牛客户与授权中心', backgroundColor: '#f7f7f8',
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, devTools: !app.isPackaged } });
+  process.stderr.write('MANAGER_STAGE window-created\n');
   window.setMenu(null);
   window.webContents.setWindowOpenHandler(({ url }) => { if (url === 'https://keygate.app' || url === 'https://keygate.app/') void shell.openExternal(url); return { action: 'deny' }; });
   window.webContents.on('will-navigate', (event, url) => { if (new URL(url).origin !== runtime.address) event.preventDefault(); });
@@ -40,6 +42,7 @@ const startup = app.whenReady().then(async () => {
     callback({ requestHeaders: headers });
   });
   await window.loadURL(runtime.address);
+  process.stderr.write('MANAGER_STAGE window-loaded\n');
 }).finally(() => { starting = false; }).catch(error => { process.stderr.write(`MANAGER_START_FAILED ${error.name} ${error.code||'none'} ${error.cause?.code||'none'}\n`); dialog.showErrorBox('管理端未能启动', `${error.message}\n现有资料保留。`); app.quit(); });
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', event => {

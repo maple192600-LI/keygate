@@ -67,12 +67,14 @@ function execute(executable, args, options = {}) {
   catch (cause) { throw new Error(`本地运行步骤失败：${path.basename(executable)}。请检查资料目录中的运行日志。`, { cause }); }
 }
 async function waitForHealth(address, child, token, deadline = 30000) {
+  process.stderr.write('MANAGER_STAGE health-wait-start\n');
   const until = Date.now() + deadline;
   while (Date.now() < until) {
     if (child.exitCode !== null || child.signalCode) throw new Error('本地管理服务启动失败，请查看运行日志。');
     try {
       const challenge = randomBytes(32);
       const response = await fetch(`${address}/health?challenge=${challenge.toString('hex')}`, { signal: AbortSignal.timeout(1000) });
+      process.stderr.write(`MANAGER_STAGE health-response ${response.status}\n`);
       const value = await response.json();
       if (response.ok && value.data?.deployment === 'local_offline') {
         const expected = createHmac('sha256', Buffer.from(token, 'hex')).update('snail-runtime-ready/v1\0').update(challenge).digest();
@@ -80,6 +82,7 @@ async function waitForHealth(address, child, token, deadline = 30000) {
         if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof) || !timingSafeEqual(expected, Buffer.from(proof, 'hex')))
           throw Object.assign(new Error('本地服务身份未通过校验，已停止打开管理窗口。'), { code: 'LOCAL_RUNTIME_UNTRUSTED' });
         if (child.exitCode !== null || child.signalCode) throw new Error('本地管理服务已经退出，未打开管理窗口。');
+        process.stderr.write('MANAGER_STAGE health-verified\n');
         return;
       }
     } catch (error) { if (error.code === 'LOCAL_RUNTIME_UNTRUSTED') throw error; /* Bounded readiness retry. */ }
@@ -134,6 +137,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
       LICENSE_SIGNING_KEY: '', ADMIN_EMAILS: '', SMTP_HOST: '', SMTP_PASSWORD: '', REDIS_URL: '',
       STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', STORAGE_BUCKET: '', STORAGE_ACCESS_KEY: '', STORAGE_SECRET_KEY: '', STORAGE_ENDPOINT: '' } });
   } finally { fs.closeSync(log); }
+  process.stderr.write('MANAGER_STAGE server-spawned\n');
   let spawnError, ready = false;
   child.on('error', error => { spawnError = error; });
   const exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
