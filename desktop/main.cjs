@@ -48,5 +48,5 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', event => {
   if (shutdownComplete || (!runtime && !starting)) return;
   event.preventDefault(); if (closing) return; closing = true;
-  startup.then(() => runtime?.stop()).then(() => { shutdownComplete = true; app.quit(); }).catch(error => { closing = false; dialog.showErrorBox('管理端尚未正常关闭', error.message); });
+  startup.then(() => runtime?.stop()).then(result => { if (result?.cleanupWarning) dialog.showErrorBox('辅助目录已保留', `${result.cleanupWarning.message}\n目录：${result.cleanupWarning.directory}\n本地服务和数据库均已停止。`); shutdownComplete = true; app.quit(); }).catch(error => { closing = false; dialog.showErrorBox('管理端尚未正常关闭', error.message); });
 });

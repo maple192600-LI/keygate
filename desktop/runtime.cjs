@@ -168,7 +168,12 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
       if (running) execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
       databaseStopped = true;
     }
-    native.release?.();
+    try { native.release?.(); }
+    catch (error) {
+      const cleanupWarning = { code: 'NATIVE_MAPPING_RETAINED', directory: path.dirname(native.dataRoot), message: error.message };
+      process.stderr.write(`MANAGER_CLEANUP_WARNING ${JSON.stringify(cleanupWarning)}\n`);
+      return { cleanupWarning };
+    }
   }
   let stop = async () => stopDatabase();
   try {
@@ -207,7 +212,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
       let timer;
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('管理服务尚未正常关闭，请保留窗口并重试。')), 15000); })]).finally(() => clearTimeout(timer));
     }
-    stopDatabase();
+    return stopDatabase();
   };
   await waitForHealth(address, child, shutdownToken); if (spawnError) throw spawnError; ready = true;
   return { address, stop, setupToken: shutdownToken };
