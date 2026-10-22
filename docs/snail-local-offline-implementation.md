@@ -96,3 +96,18 @@ Jev 节点真实调用：`jev-1.14.0` 对当前 T09 设计和证据判断 aligne
 Go重新构建后，node --test desktop/runtime.spec.cjs desktop/local-offline.spec.cjs 实际3/3通过（25.9秒），证据 C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-GbZfIv；当前合成管理窗口备份恢复、关闭重开、移交续期全部执行。Go执行文件SHA256为9c2c1d35adbe68b6535bd32f76ebcb484c3178827a833d6d3a6ab631b66e30e2。源码已改，待整改定向独立复审；该记录不构成正式安装包验收。
 
 审查期间曾怀疑对不应有的在线关联记录删除/移走违反A19；复核原句后证据不足，审查撤回该项。未应用的额外保留迁移尝试已撤回，未修改既有迁移或数据。不为不存在的旧客户开发修复或迁移路径。
+
+
+### T09 复审与原客户端移交续期
+
+14f251982292cc61896c315abe56b5e1410809f0 相对75be626的三项整改已完成独立只读复审，No findings；审查不运行测试，不冒充安装包或大数据库性能验收。
+
+cmd/server/client_bridge_test.go 扩展到两个独立初始化的合成管理库，经真实 HTTP 导出业务包、空实例预览/导入、逐字节核对原件、单独导入加密签发身份、续期。客户端原 policy 和安装不变，desktop-client/tests/electron/keygate-client-acceptance.spec.ts 在同一原 Electron 上导入新管理端续期文件，确认同licenseId/keyId、revision=2、原截止再加7天，正常重开仍是2。实际 playwright test --config playwright.licensing.config.ts 一项通过（14.5秒），证据 C:/Users/Administrator/AppData/Local/Temp/snail-v2-closure-PLfvqW。签发私钥只在本轮隔离管理根中，测试只向客户端传公开策略、申请和签名原件；不是正式客户安装包。
+
+### T10 独立管理运行包准备
+
+新增 desktop/package.json 与 npm锁文件、ensure-runtime.cjs、package.cjs、run.bat、stop.bat，以及中文构建/对应源码说明。用户明确要求不用Docker，故以原生Electron窗口管理本地Go/PostgreSQL。pack入口固定已提交干净源码后编译Go和中文网页，包含PostgreSQL bin/lib/share与其原始许可，附对应源码ZIP及LICENSE/NOTICE；运行包不带数据库、管理私钥或TEST_ONLY文件。
+
+新增正常停止命令：第二实例仅请求原窗口正常退出，不启动新的数据库、不强杀。main.cjs 也等待正在启动的服务，退出途中不另开窗口。原生窗口流程扩展实际调用停止入口，PG状态确认已停止；本次3/3通过（22.4秒），证据 C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-wgVRm3。第一稿仅测试变量 stopped 与本文件既有变量重名，Node语法检查失败；已改为 managerStopped 后实际全流程通过，未改产品行为迎合测试。
+
+Windows沙盒预检已真实执行：联网和剪贴板等关闭，仅映射本任务公开验收程序与输出目录，来宾实际MachineGuid的用途摘要与宿主不同，来宾22621、WDAGUtilityAccount，完成后正常关机。证据 D:/snail-worktrees/commercial-licensing-windows-acceptance-20261023/sandbox-probe-0e3d9a3e92b84f7f8306cfd0513bb949/output/probe.json；此证据只证明独立设备测试环境可用，不证明安装包通过。

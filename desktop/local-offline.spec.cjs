@@ -315,7 +315,12 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(target.getByRole('cell',{name:'synthetic_owner',exact:true})).not.toHaveCount(0);
   await expect(target.getByRole('cell',{name:'handoff_owner',exact:true})).not.toHaveCount(0);
   await target.screenshot({path:path.join(root,'handoff-provenance.png'),fullPage:true});
-  await electron.close();electron=null;
+  const quitProcess=electron.process();
+  const managerStopped=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('正常停止入口未关闭管理端')),30000);quitProcess.once('exit',code=>{clearTimeout(timer);code===0?resolve():reject(new Error(`管理端退出码 ${code}`));});});
+  const stopEnv={...process.env,APPDATA:path.join(root,'appdata'),LOCALAPPDATA:path.join(root,'localappdata'),TEMP:path.join(root,'tmp'),TMP:path.join(root,'tmp'),SNAIL_MANAGER_DEV_DATA:targetData,SNAIL_MANAGER_DEV_POSTGRES:postgresRoot};
+  delete stopEnv.ELECTRON_RUN_AS_NODE;
+  const stopCommand=spawnSync(executablePath,[path.join(__dirname,'main.cjs'),'--snail-stop'],{env:stopEnv,windowsHide:true,timeout:15000});
+  assert.equal(stopCommand.status,0);await managerStopped;electron=null;
   assert.equal(spawnSync(path.join(postgresRoot,'bin/pg_ctl.exe'),['status','-D',path.join(targetData,'postgres')],{windowsHide:true}).status,3);
   console.log('T03_NATIVE_EVIDENCE', root);
 });

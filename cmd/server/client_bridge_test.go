@@ -108,4 +108,93 @@ func TestLocalOfflineElectronBridge(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "issuance-result.json"), bytes, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Move actual management data to a separately initialized empty instance.
+	// The existing Electron policy remains untouched and trusts the same key.
+	status, bundle := a.call(t, "POST", "/api/v1/admin/business-bundle/export", nil)
+	if status != 200 {
+		t.Fatalf("export %d %s", status, bundle)
+	}
+	status, encryptedIdentity := a.call(t, "GET", "/api/v1/admin/offline-key/encrypted", nil)
+	if status != 200 {
+		t.Fatal("identity export failed")
+	}
+	b := localApp(t)
+	const targetPassword = "Synthetic-handoff-bridge-owner-password"
+	for _, step := range []struct {
+		path   string
+		body   any
+		status int
+	}{
+		{"/api/v1/local/setup", map[string]string{"username": "handoff_bridge_owner", "password": targetPassword, "siteName": "合成移交目标", "contact": "隔离验收"}, 201},
+		{"/api/v1/auth/password/login", map[string]string{"username": "handoff_bridge_owner", "password": targetPassword}, 200},
+	} {
+		if status, body = b.call(t, "POST", step.path, step.body); status != step.status {
+			t.Fatalf("target setup %d %s", status, body)
+		}
+	}
+	status, body = b.upload(t, "/api/v1/admin/business-bundle/preview", bundle, "")
+	if status != 200 {
+		t.Fatalf("target preview %d %s", status, body)
+	}
+	handoff := decodeLocal[struct {
+		ID      string              `json:"previewId"`
+		Summary store.BundleSummary `json:"summary"`
+	}](t, body)
+	if handoff.Summary.Customers != 1 || handoff.Summary.Licenses != 1 || handoff.Summary.Originals != 1 || handoff.Summary.KeyID != identity.KeyID {
+		t.Fatal("handoff summary mismatch")
+	}
+	status, body = b.call(t, "POST", "/api/v1/admin/business-bundle/import", map[string]string{"previewId": handoff.ID, "ownerPassword": targetPassword})
+	if status != 200 {
+		t.Fatalf("target import %d %s", status, body)
+	}
+	status, transferredOriginal := b.call(t, "GET", "/api/v1/admin/license-issuances/"+result.IssuanceID+"/file", nil)
+	original, err := os.ReadFile(filepath.Join(root, "client.snaillic"))
+	if err != nil || status != 200 || string(transferredOriginal) != string(original) {
+		t.Fatal("target changed original bytes", err)
+	}
+	status, body = b.call(t, "POST", "/api/v1/admin/offline-key/import/preview", map[string]string{"identityFile": string(encryptedIdentity), "passphrase": "Synthetic-bridge-key-password"})
+	if status != 200 {
+		t.Fatalf("target key preview %d %s", status, body)
+	}
+	keyPreview := decodeLocal[struct {
+		ID string `json:"previewId"`
+	}](t, body)
+	status, body = b.call(t, "POST", "/api/v1/admin/offline-key/import", map[string]string{"previewId": keyPreview.ID, "ownerPassword": targetPassword})
+	if status != 200 {
+		t.Fatalf("target key import %d %s", status, body)
+	}
+	status, body = b.call(t, "POST", "/api/v1/admin/offline-key/unlock", map[string]string{"passphrase": "Synthetic-bridge-key-password"})
+	if status != 200 {
+		t.Fatalf("target unlock %d %s", status, body)
+	}
+	renewIntent := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: result.Revision, Term: offline.Term{Kind: "days", Amount: 7}}
+	status, body = b.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renewIntent)
+	if status != 200 {
+		t.Fatalf("target renewal preview %d %s", status, body)
+	}
+	renewPreview := decodeLocal[service.OfflinePreview](t, body)
+	status, body = b.call(t, "POST", "/api/v1/admin/offline-licenses/"+result.LicenseID+"/renew", service.OfflineIssueCommand{OfflineIntent: renewIntent, OperationID: store.NewID(), PreviewBase: renewPreview.PreviewBase})
+	if status != 200 {
+		t.Fatalf("target renewal %d %s", status, body)
+	}
+	renewed := decodeLocal[service.OfflineIssueResult](t, body)
+	if renewed.LicenseID != result.LicenseID || renewed.Revision != 2 || renewed.KeyID != result.KeyID {
+		t.Fatal("handoff renewal contract changed")
+	}
+	oldEnd, _ := time.Parse(time.RFC3339Nano, *result.ExpiresAt)
+	newEnd, _ := time.Parse(time.RFC3339Nano, *renewed.ExpiresAt)
+	if newEnd.Sub(oldEnd) != 7*24*time.Hour {
+		t.Fatal("handoff lost original remaining term")
+	}
+	status, body = b.call(t, "GET", "/api/v1/admin/license-issuances/"+renewed.IssuanceID+"/file", nil)
+	if status != 200 {
+		t.Fatal("target renewed original unavailable")
+	}
+	if err = os.WriteFile(filepath.Join(root, "handoff-renewal.snaillic"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	bytes, _ = json.Marshal(renewed)
+	if err = os.WriteFile(filepath.Join(root, "handoff-result.json"), bytes, 0600); err != nil {
+		t.Fatal(err)
+	}
 }
