@@ -99,8 +99,9 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
     if (fs.existsSync(cluster) && fs.readdirSync(cluster).length) throw new Error('数据库初始化尚未完成，请保留资料并联系支持；不会清空目录。');
     const passwordFile = path.join(dataRoot, `init-${randomBytes(16).toString('hex')}.tmp`);
     fs.writeFileSync(passwordFile, config.databasePassword, { flag: 'wx', mode: 0o600 });
-    try { process.stderr.write('MANAGER_STAGE initdb-start\n'); execute(pg('initdb'), ['-D', cluster, '-U', 'snail_runtime', '--pwfile', passwordFile, '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--encoding=UTF8', '--locale=C']); process.stderr.write('MANAGER_STAGE initdb-done\n'); }
-    finally { fs.unlinkSync(passwordFile); }
+    const initializationLog = fs.openSync(path.join(logs, 'initialization.log'), 'a', 0o600);
+    try { process.stderr.write('MANAGER_STAGE initdb-start\n'); execute(pg('initdb'), ['-D', cluster, '-U', 'snail_runtime', '--pwfile', passwordFile, '--auth-host=scram-sha-256', '--auth-local=scram-sha-256', '--encoding=UTF8', '--locale=C'], { stdio: ['ignore', initializationLog, initializationLog], timeout: 30000 }); process.stderr.write('MANAGER_STAGE initdb-done\n'); }
+    finally { fs.closeSync(initializationLog); fs.unlinkSync(passwordFile); }
   }
   let running = false;
   try { execFileSync(pg('pg_ctl'), ['status', '-D', cluster], { windowsHide: true, stdio: 'ignore' }); running = true; } catch (error) { if (error.status !== 3) throw new Error('无法确认本机数据库状态，请保留资料并检查运行日志。'); }
