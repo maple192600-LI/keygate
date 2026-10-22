@@ -25,7 +25,7 @@ func (h *OfflineLifecycleHandler) List(c *gin.Context) {
 		return
 	}
 	term, delivery := c.Query("termState"), c.Query("deliveryState")
-	if term != "" && term != "not_yet_valid" && term != "valid" && term != "expired" && term != "perpetual" || delivery != "" && delivery != "pending" && delivery != "recorded" {
+	if term != "" && term != "not_yet_valid" && term != "valid" && term != "expired" && term != "perpetual" && term != "active" || delivery != "" && delivery != "pending" && delivery != "recorded" {
 		response.BadRequest(c, "筛选状态无效")
 		return
 	}

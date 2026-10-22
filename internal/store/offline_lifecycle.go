@@ -64,7 +64,9 @@ func (s *Store) OfflineLicenses(ctx context.Context, f OfflineLicenseFilter) ([]
 	if f.CustomerID != "" {
 		q.Where("c.id=?", f.CustomerID)
 	}
-	if f.TermState != "" {
+	if f.TermState == "active" {
+		q.Where("(" + offlineTermSQL + ") IN ('valid','perpetual')")
+	} else if f.TermState != "" {
 		q.Where("("+offlineTermSQL+")=?", f.TermState)
 	}
 	if f.DeliveryState != "" {

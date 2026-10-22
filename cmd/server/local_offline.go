@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -59,9 +61,18 @@ func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func
 			response.Err(c, 503, "DATABASE_UNAVAILABLE", "本地数据库暂时不可用")
 			return
 		}
-		response.OK(c, gin.H{"status": "ok", "deployment": "local_offline"})
+		value := gin.H{"status": "ok", "deployment": "local_offline"}
+		if challenge, err := hex.DecodeString(c.Query("challenge")); err == nil && len(challenge) == 32 {
+			if key, err := hex.DecodeString(cfg.SnailRuntimeToken); err == nil && len(key) == 32 {
+				mac := hmac.New(sha256.New, key)
+				mac.Write([]byte("snail-runtime-ready/v1\x00"))
+				mac.Write(challenge)
+				value["proof"] = hex.EncodeToString(mac.Sum(nil))
+			}
+		}
+		response.OK(c, value)
 	})
-	if token := os.Getenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN"); len(token) == 64 && len(shutdown) == 1 {
+	if token := cfg.SnailRuntimeToken; len(token) == 64 && len(shutdown) == 1 {
 		r.POST("/internal/shutdown", func(c *gin.Context) {
 			if subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Snail-Runtime-Token")), []byte(token)) != 1 {
 				response.Unauthorized(c, "此操作仅供本机管理启动器使用")
@@ -81,7 +92,16 @@ func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func
 		response.OK(c, gin.H{"site_name": "蜗牛客户与授权中心", "deployment": "local_offline", "attribution_text": branding.Tagline, "attribution_url": branding.URL})
 	})
 	authRate := middleware.RateLimitByIPScoped("local-password:"+cfg.Port, 10, time.Minute)
-	api.POST("/local/setup", authRate, local.Setup)
+	api.POST("/local/setup", func(c *gin.Context) {
+		// Loopback and Origin are not a Windows-user identity. Only the
+		// launching Electron main process holds this ephemeral capability.
+		if len(cfg.SnailRuntimeToken) != 64 || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Snail-Setup-Token")), []byte(cfg.SnailRuntimeToken)) != 1 {
+			response.Err(c, 403, "LOCAL_WINDOW_REQUIRED", "请从本机独立管理窗口完成首次设置")
+			c.Abort()
+			return
+		}
+		c.Next()
+	}, authRate, local.Setup)
 	api.POST("/auth/password/login", authRate, local.Login)
 	api.POST("/auth/refresh", middleware.RateLimitByIPScoped("local-refresh", 60, time.Minute), local.Refresh)
 	owner := api.Group("", local.RequireOwner())

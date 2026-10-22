@@ -23,6 +23,12 @@ app.whenReady().then(async () => {
   const canWriteClipboard = (contents, permission) => contents === window.webContents && permission === 'clipboard-sanitized-write' && new URL(contents.getURL()).origin === runtime.address;
   window.webContents.session.setPermissionCheckHandler((contents, permission, origin) => Boolean(contents && canWriteClipboard(contents, permission) && origin === runtime.address));
   window.webContents.session.setPermissionRequestHandler((contents, permission, callback) => callback(canWriteClipboard(contents, permission)));
+  window.webContents.session.webRequest.onBeforeSendHeaders({ urls: [runtime.address + '/api/v1/local/setup'] }, (details, callback) => {
+    const headers = { ...details.requestHeaders };
+    if (details.webContentsId === window.webContents.id && new URL(details.url).origin === runtime.address)
+      headers['X-Snail-Setup-Token'] = runtime.setupToken;
+    callback({ requestHeaders: headers });
+  });
   await window.loadURL(runtime.address);
 }).catch(error => { dialog.showErrorBox('管理端未能启动', `${error.message}\n现有资料保留。`); app.quit(); });
 app.on('window-all-closed', () => app.quit());

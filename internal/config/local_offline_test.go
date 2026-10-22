@@ -7,6 +7,7 @@ import (
 
 func TestLocalOfflineConfig(t *testing.T) {
 	t.Setenv("SNAIL_DEPLOYMENT", "local_offline")
+	t.Setenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN", strings.Repeat("c", 64))
 	t.Setenv("ENVIRONMENT", "production")
 	t.Setenv("PORT", "9000")
 	t.Setenv("BASE_URL", "http://127.0.0.1:9000")
@@ -47,6 +48,12 @@ func TestLocalOfflineConfig(t *testing.T) {
 		t.Fatal("development bypass accepted")
 	}
 	cfg.Environment = "production"
+	cfg.SnailRuntimeToken = ""
+	_, fatal = cfg.ValidateSecurityDefaults()
+	if len(fatal) == 0 {
+		t.Fatal("missing native runtime identity accepted")
+	}
+	cfg.SnailRuntimeToken = strings.Repeat("c", 64)
 	cfg.SMTPHost = "mail.invalid"
 	_, fatal = cfg.ValidateSecurityDefaults()
 	if len(fatal) == 0 {

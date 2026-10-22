@@ -29,6 +29,10 @@ test('原生独立窗口首次设置、无邮箱客户、真实签发下载交�
   }
   const window = await launch();
   await expect(window.getByRole('heading', { name: '首次设置', exact: true })).toBeVisible();
+  const address=new URL(window.url()).origin;
+  const outside=await fetch(address+'/api/v1/local/setup',{method:'POST',headers:{'Content-Type':'application/json',Origin:address},body:JSON.stringify({username:'outside_owner',password:'Synthetic-outside-password',siteName:'不应建立',contact:'隔离测试'})});
+  assert.equal(outside.status,403);assert.equal((await outside.json()).error.code,'LOCAL_WINDOW_REQUIRED');
+  await expect(window.getByRole('heading',{name:'首次设置',exact:true})).toBeVisible();
   const secrets = fs.readFileSync(path.join(data, 'runtime.json'));
   assert.ok(fs.statSync(path.join(data, 'runtime.json')).birthtimeMs <= fs.statSync(path.join(data, 'postgres/PG_VERSION')).birthtimeMs);
   await window.getByLabel('管理用户名', { exact: true }).fill('synthetic_owner');
@@ -157,6 +161,9 @@ test('原生独立窗口首次设置、无邮箱客户、真实签发下载交�
   await window.getByRole('button',{name:'概览',exact:true}).click();
   await expect(window.getByRole('button',{name:'有效授权 1',exact:true})).toBeVisible();
   await expect(window.getByRole('button',{name:'待交付 1',exact:true})).toBeVisible();
+  await window.getByRole('button',{name:'有效授权 1',exact:true}).click();
+  await expect(window.getByRole('combobox',{name:'期限状态',exact:true})).toHaveValue('active');
+  await expect(window.getByRole('cell',{name:'永久',exact:true})).toHaveCount(2);
   await window.getByRole('button',{name:'客户',exact:true}).click();
   const cookies = await window.context().cookies();
   assert.ok(cookies.find(cookie => cookie.name === 'session')?.httpOnly);
@@ -178,6 +185,15 @@ test('原生独立窗口首次设置、无邮箱客户、真实签发下载交�
   await reopened.getByRole('button', { name: '查看档案', exact: true }).click();
   await expect(reopened.getByLabel('来源／介绍人', { exact: true })).toHaveValue('合成介绍人');
   await expect(reopened.getByLabel('邮箱', { exact: true })).toHaveValue('');
+  const customerProfile=reopened.getByRole('dialog',{name:'客户档案',exact:true});
+  await customerProfile.getByLabel('调整原因',{exact:true}).fill('合成客户停发刷新检查');
+  await customerProfile.getByRole('button',{name:'停止续发',exact:true}).click();
+  await expect(customerProfile.getByRole('cell',{name:'已停发',exact:true})).toBeVisible();
+  await expect(customerProfile.getByRole('button',{name:'为此客户发放授权',exact:true})).toBeDisabled();
+  await customerProfile.getByLabel('调整原因',{exact:true}).fill('合成客户恢复刷新检查');
+  await customerProfile.getByRole('button',{name:'恢复续发',exact:true}).click();
+  await expect(customerProfile.getByRole('cell',{name:'可续发',exact:true})).toBeVisible();
+  await expect(customerProfile.getByRole('button',{name:'为此客户发放授权',exact:true})).toBeEnabled();
   await electron.close(); electron = null;
   assert.equal(spawnSync(path.join(postgresRoot, 'bin/pg_ctl.exe'), ['status', '-D', path.join(data, 'postgres')], { windowsHide: true }).status, 3);
   console.log('T03_NATIVE_EVIDENCE', root);

@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, createHmac, timingSafeEqual } = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
 
 function directory(target) {
@@ -56,15 +56,23 @@ function execute(executable, args, options = {}) {
   try { return execFileSync(executable, args, { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], ...options }); }
   catch (cause) { throw new Error(`本地运行步骤失败：${path.basename(executable)}。请检查资料目录中的运行日志。`, { cause }); }
 }
-async function waitForHealth(address, child, deadline = 30000) {
+async function waitForHealth(address, child, token, deadline = 30000) {
   const until = Date.now() + deadline;
   while (Date.now() < until) {
-    if (child.exitCode !== null) throw new Error('本地管理服务启动失败，请查看运行日志。');
+    if (child.exitCode !== null || child.signalCode) throw new Error('本地管理服务启动失败，请查看运行日志。');
     try {
-      const response = await fetch(`${address}/health`, { signal: AbortSignal.timeout(1000) });
+      const challenge = randomBytes(32);
+      const response = await fetch(`${address}/health?challenge=${challenge.toString('hex')}`, { signal: AbortSignal.timeout(1000) });
       const value = await response.json();
-      if (response.ok && value.data?.deployment === 'local_offline') return;
-    } catch { /* readiness is checked again within the bounded deadline */ }
+      if (response.ok && value.data?.deployment === 'local_offline') {
+        const expected = createHmac('sha256', Buffer.from(token, 'hex')).update('snail-runtime-ready/v1\0').update(challenge).digest();
+        const proof = value.data.proof;
+        if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof) || !timingSafeEqual(expected, Buffer.from(proof, 'hex')))
+          throw Object.assign(new Error('本地服务身份未通过校验，已停止打开管理窗口。'), { code: 'LOCAL_RUNTIME_UNTRUSTED' });
+        if (child.exitCode !== null || child.signalCode) throw new Error('本地管理服务已经退出，未打开管理窗口。');
+        return;
+      }
+    } catch (error) { if (error.code === 'LOCAL_RUNTIME_UNTRUSTED') throw error; /* Bounded readiness retry. */ }
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error('本地管理服务未能就绪，请查看运行日志；现有资料保留。');
@@ -108,19 +116,20 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
       LICENSE_SIGNING_KEY: '', ADMIN_EMAILS: '', SMTP_HOST: '', SMTP_PASSWORD: '', REDIS_URL: '',
       STRIPE_SECRET_KEY: '', STRIPE_WEBHOOK_SECRET: '', STORAGE_BUCKET: '', STORAGE_ACCESS_KEY: '', STORAGE_SECRET_KEY: '', STORAGE_ENDPOINT: '' } });
   } finally { fs.closeSync(log); }
-  let spawnError;
+  let spawnError, ready = false;
   child.on('error', error => { spawnError = error; });
   const exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
   stop = async function stopRuntime() {
     if (child.exitCode === null && !spawnError) {
-      await fetch(`${address}/internal/shutdown`, { method: 'POST', headers: { 'X-Snail-Runtime-Token': shutdownToken }, signal: AbortSignal.timeout(3000) });
+      if (ready) await fetch(`${address}/internal/shutdown`, { method: 'POST', headers: { 'X-Snail-Runtime-Token': shutdownToken }, signal: AbortSignal.timeout(3000) });
+      else child.kill(); // Only our unverified child; never trust a competing HTTP listener.
       let timer;
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('管理服务尚未正常关闭，请保留窗口并重试。')), 15000); })]).finally(() => clearTimeout(timer));
     }
     execute(pg('pg_ctl'), ['stop', '-D', cluster, '-m', 'fast', '-w', '-t', '20']);
   };
-  await waitForHealth(address, child); if (spawnError) throw spawnError;
-  return { address, stop };
+  await waitForHealth(address, child, shutdownToken); if (spawnError) throw spawnError; ready = true;
+  return { address, stop, setupToken: shutdownToken };
   } catch (error) { try { await stop(); } catch (shutdownError) { throw new AggregateError([error, shutdownError], '管理端启动及关闭失败，请保留运行日志与资料。'); }; throw error; }
 }
-module.exports = { startRuntime, secrets };
+module.exports = { startRuntime, secrets, waitForHealth };

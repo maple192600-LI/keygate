@@ -21,7 +21,7 @@ export default function LocalOfflineApp() {
   const [reload, setReload] = useState(0)
   const [issuing,setIssuing] = useState<{customer:CommercialCustomer;existing?:{id:string;revision:number;action:"renew"|"transfer"}}|null>(null)
   const [page, setPage] = useState<"overview"|"customers"|"licenses"|"delivery"|"settings">("customers")
-  const [epoch,setEpoch]=useState(0),[expiring,setExpiring]=useState(false)
+  const [epoch,setEpoch]=useState(0),[expiring,setExpiring]=useState(false),[termFilter,setTermFilter]=useState("")
   useEffect(() => {
     let alive = true
     localRequest<{ needed: boolean }>("/setup/status").then(async status => {
@@ -36,17 +36,17 @@ export default function LocalOfflineApp() {
   const manageLicense=async(row:OfflineLicense,action:"renew"|"transfer")=>{
     try{const customer=await localRequest<CommercialCustomer>(`/admin/commercial-customers/${row.customerId}`);setIssuing({customer,existing:{id:row.id,revision:row.revision,action}})}catch(cause){setError(message(cause))}
   }
-  const createLicense=()=>{setPage("customers");setExpiring(false)}
+  const createLicense=()=>{setPage("customers");setExpiring(false);setTermFilter("")}
   return <div className="snail-local min-h-screen bg-muted/40 text-foreground">
     {mode === "loading" && <div role="status" className="p-8">正在打开管理端…</div>}
     {mode === "error" && <div className="mx-auto grid max-w-md gap-4 p-8"><div role="alert">{error}</div><Button onClick={() => { setMode("loading"); setReload(value => value + 1) }}>重新连接</Button>{attribution}</div>}
     {(mode === "setup" || mode === "login") && <LoginForm setup={mode === "setup"} onSetup={() => setMode("login")} onLogin={user => { setOwner(user); setMode("ready") }} />}
     {mode === "ready" && owner && <div className="grid min-h-screen grid-cols-[224px_minmax(0,1fr)]">
-      <aside className="sticky top-0 flex h-screen flex-col gap-7 border-r bg-card px-5 py-7"><div className="flex items-center gap-3"><img src="/snail-icon.svg" alt="" className="h-9 w-9"/><strong className="text-lg">蜗牛客户与授权中心</strong></div><nav aria-label="管理导航" className="grid gap-2">{([["overview","概览"],["customers","客户"],["licenses","授权"],["delivery","交付记录"],["settings","设置"]] as const).map(([key,label])=><Button key={key} variant={page===key?"default":"ghost"} className="justify-start" onClick={()=>{setPage(key);setExpiring(false);setError("")}}>{label}</Button>)}</nav><footer className="mt-auto grid gap-3"><span className="text-sm text-muted-foreground">{owner.username}</span><Button variant="outline" onClick={async()=>{try{await localRequest("/auth/logout",{});signedOut()}catch(cause){setError(message(cause))}}}>退出登录</Button>{attribution}</footer></aside>
+      <aside className="sticky top-0 flex h-screen flex-col gap-7 border-r bg-card px-5 py-7"><div className="flex items-center gap-3"><img src="/snail-icon.svg" alt="" className="h-9 w-9"/><strong className="text-lg">蜗牛客户与授权中心</strong></div><nav aria-label="管理导航" className="grid gap-2">{([["overview","概览"],["customers","客户"],["licenses","授权"],["delivery","交付记录"],["settings","设置"]] as const).map(([key,label])=><Button key={key} variant={page===key?"default":"ghost"} className="justify-start" onClick={()=>{setPage(key);setExpiring(false);setTermFilter("");setError("")}}>{label}</Button>)}</nav><footer className="mt-auto grid gap-3"><span className="text-sm text-muted-foreground">{owner.username}</span><Button variant="outline" onClick={async()=>{try{await localRequest("/auth/logout",{});signedOut()}catch(cause){setError(message(cause))}}}>退出登录</Button>{attribution}</footer></aside>
       <main className="min-w-0 p-7">{error&&<div role="alert" className="mb-4 text-destructive">{error}</div>}
         {page==="customers"&&<LocalCustomers epoch={epoch} onIssue={customer=>setIssuing({customer})} onManage={manageLicense}/>}
-        {(page==="licenses"||page==="delivery")&&<LocalLicenses key={`${page}-${expiring}`} delivery={page==="delivery"} initialExpiring={expiring} epoch={epoch} onCreate={createLicense} onManage={manageLicense}/>}
-        {page==="overview"&&<LocalOverview onCreate={createLicense} onNavigate={(target,soon)=>{setPage(target);setExpiring(Boolean(soon))}}/>}
+        {(page==="licenses"||page==="delivery")&&<LocalLicenses key={`${page}-${expiring}-${termFilter}`} initialTermState={termFilter} delivery={page==="delivery"} initialExpiring={expiring} epoch={epoch} onCreate={createLicense} onManage={manageLicense}/>}
+        {page==="overview"&&<LocalOverview onCreate={createLicense} onNavigate={(target,soon,term)=>{setPage(target);setExpiring(Boolean(soon));setTermFilter(term||"")}}/>}
         {page==="settings"&&<div className="grid gap-6"><h1 className="text-xl font-semibold">设置</h1><AccountSettings onSignedOut={signedOut}/><details className="rounded-xl border bg-card"><summary className="cursor-pointer p-5 font-semibold">签发身份</summary><LocalSigningIdentity/></details></div>}
       </main>{issuing&&<LocalIssue customer={issuing.customer} existing={issuing.existing} onClose={()=>{setIssuing(null);setEpoch(value=>value+1)}} onSettings={()=>{setIssuing(null);setPage("settings")}}/>}
     </div>}

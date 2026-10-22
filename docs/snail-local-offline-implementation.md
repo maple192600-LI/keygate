@@ -36,3 +36,19 @@ Windows `pg_ctl start` 捕获标准流会因后台数据库继承管道而挂起
 ## 后续依赖
 
 客户端 T08 仍须逐项审查 history 写方法及到期保护；T09 完整加密备份/恢复、空实例业务移交及历史操作者快照尚未实现；T10 两个正式 Windows 包、用户控制的正式身份、原生安装、真实不同 MachineGuid 验证尚未完成；最后固定候选执行完整检查、独立审查和第 13 节 P0。现阶段不能用于真实商业客户交付。
+
+
+## T03/T07 独立审查整改
+
+审查固定候选 `934c19fde97b083b3fa9a1021f6e72519c1ee20a`，比较 `974b471fb8b6d8160ac646774e10eddcf9751a9a`，只读独立审查确认三个 P2 和一个 P3，已作本包整改：
+
+1. `internal/config/config.go`、`cmd/server/local_offline.go`、`desktop/main.cjs`：首次设置除 Host/Origin 防护外，还要求本次启动器产生的32字节随机能力；由 Electron 主进程仅为本窗口的同源 setup 请求加入私有请求头，不传入页面脚本、不落盘。缺启动身份时本地 production 配置拒绝。已建立 owner 后，原锁内唯一 owner 检查仍防重新初始化。
+2. `desktop/runtime.cjs` 与 Go `/health`：启动器发随机32字节挑战，服务用仅启动器与子进程持有的本次能力做带用途域的 HMAC-SHA256 响应。公开 deployment 标记不再作为信任依据；挑战不发送秘密，并在响应后复核子进程存活。未通过身份检查时不开窗口；启动失败仅终止本次生成的未就绪子进程并关闭本次 PG，不信任竞争 HTTP 监听者的关闭接口。
+3. `web/src/pages/local-overview.tsx`、`local-offline.tsx`、`local-licenses.tsx`、`internal/handler/offline_lifecycle.go`、`internal/store/offline_lifecycle.go`：有效授权卡进入明确的“有效（含永久）”筛选，只包括已生效未到期和永久证，与概览数量一致。
+4. `web/src/pages/local-customers.tsx`：客户停发/恢复后，已有授权列表立即重新读取；停发时档案中的发放按钮禁用，恢复时恢复可用。原服务端拒绝仍保留。
+
+验证：`node --test desktop/runtime.spec.cjs` 2/2，通过伪健康监听者拒绝、挑战合法响应及已退出进程拒绝。任务专属 PostgreSQL 下 `go test ./cmd/server ./internal/config -count=1` 实际通过（非跳过），包含无 Origin/伪 Origin/错能力的 setup 请求都403且 owner仍0，合法能力唯一创建，实际 Go HMAC 响应与独立预期一致。`go build -p 1 -trimpath ... ./cmd/server` 和本地模式 `bun run --cwd web build` 通过。
+
+真实原生管理窗口：`node --test desktop/local-offline.spec.cjs` 1/1（11.7秒），证据 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-nIbggl`。先从窗口之外发同源外观的 setup 请求，实际403；再经正常 UI 首次设置、无邮箱客户、创建隔离签发身份、签发、下载后由 Node v2验证、登记交付、续期、停发恢复、换机及改永久，点击有效卡实际选中 active 并显示永久记录；关闭 PG 确认停止，重开秘密原字节不变，客户档案停发/恢复后表格与按钮同步。新增永久显示断言首次命中期限和截止两个单元格，已改为明确核对两个，不使用 first/强制点击/额外重试。
+
+此记录为源码及原生开发窗口证据，仍非正式包；首次设置对另一 SID 的拒绝以不持启动能力的外部进程请求验证，尚未建立第二真实 Windows 账号做安装验证。T08 在客户端独立候选中验证，管理业务备份/移交和正式双设备安装交付继续待 T09/T10。旧在线到期/订阅写方法的数据库级 offline_file 排除仍待后续 P0 验证，不能仅以本地模式未注册任务代替该项。

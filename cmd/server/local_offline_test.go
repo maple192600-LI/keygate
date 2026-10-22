@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/tabloy/keygate/internal/config"
@@ -60,9 +63,10 @@ func localTestStore(t *testing.T) *store.Store {
 }
 
 type localTestApp struct {
-	server *httptest.Server
-	client *http.Client
-	store  *store.Store
+	server       *httptest.Server
+	client       *http.Client
+	store        *store.Store
+	runtimeToken string
 }
 
 func localApp(t *testing.T) *localTestApp {
@@ -71,12 +75,12 @@ func localApp(t *testing.T) *localTestApp {
 	server := httptest.NewUnstartedServer(nil)
 	address := server.Listener.Addr().String()
 	_, port, _ := strings.Cut(address, ":")
-	cfg := &config.Config{Port: port, BaseURL: "http://" + address, Environment: "production", SnailDeployment: "local_offline", SnailDataDir: t.TempDir(), JWTSecret: strings.Repeat("s", 64), ReleaseKeyEncryptionKey: strings.Repeat("a", 64)}
+	cfg := &config.Config{Port: port, BaseURL: "http://" + address, Environment: "production", SnailDeployment: "local_offline", SnailDataDir: t.TempDir(), SnailRuntimeToken: strings.Repeat("c", 64), JWTSecret: strings.Repeat("s", 64), ReleaseKeyEncryptionKey: strings.Repeat("a", 64)}
 	server.Config.Handler = newLocalOfflineRouter(cfg, s)
 	server.Start()
 	t.Cleanup(server.Close)
 	jar, _ := cookiejar.New(nil)
-	return &localTestApp{server, &http.Client{Jar: jar}, s}
+	return &localTestApp{server, &http.Client{Jar: jar}, s, cfg.SnailRuntimeToken}
 }
 func (a *localTestApp) call(t *testing.T, method, path string, body any) (int, []byte) {
 	t.Helper()
@@ -87,6 +91,9 @@ func (a *localTestApp) call(t *testing.T, method, path string, body any) (int, [
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Origin", a.server.URL)
+	if path == "/api/v1/local/setup" {
+		r.Header.Set("X-Snail-Setup-Token", a.runtimeToken)
+	}
 	resp, err := a.client.Do(r)
 	if err != nil {
 		t.Fatal(err)
@@ -186,6 +193,53 @@ func TestLocalOfflineSetupAuthenticationAndRevocation(t *testing.T) {
 	}
 	if status, _ := a.call(t, "GET", "/api/v1/auth/me", nil); status != 401 {
 		t.Fatal("logout left session valid")
+	}
+}
+
+func TestLocalOfflineWindowCapabilityAndReadiness(t *testing.T) {
+	a := localApp(t)
+	setup := map[string]string{"username": "window_owner", "password": "Synthetic-window-test-password", "siteName": "合成厂商", "contact": "合成联系号"}
+	for _, origin := range []string{"", a.server.URL} {
+		for _, token := range []string{"", strings.Repeat("0", 64)} {
+			raw, _ := json.Marshal(setup)
+			r, _ := http.NewRequest("POST", a.server.URL+"/api/v1/local/setup", bytes.NewReader(raw))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Origin", origin)
+			r.Header.Set("X-Snail-Setup-Token", token)
+			response, err := a.client.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != 403 {
+				t.Fatalf("setup accepted without window capability: %d", response.StatusCode)
+			}
+		}
+	}
+	var owners int
+	if err := a.store.DB.NewRaw("SELECT count(*) FROM users WHERE role='owner'").Scan(context.Background(), &owners); err != nil || owners != 0 {
+		t.Fatalf("denied setup changed owner: %d %v", owners, err)
+	}
+	if status, body := a.call(t, "POST", "/api/v1/local/setup", setup); status != 201 {
+		t.Fatalf("window setup %d %s", status, body)
+	}
+	challenge := strings.Repeat("e", 64)
+	status, body := a.call(t, "GET", "/health?challenge="+challenge, nil)
+	var result struct {
+		Data struct {
+			Proof string `json:"proof"`
+		} `json:"data"`
+	}
+	if status != 200 || json.Unmarshal(body, &result) != nil {
+		t.Fatalf("readiness %d %s", status, body)
+	}
+	key, _ := hex.DecodeString(a.runtimeToken)
+	nonce, _ := hex.DecodeString(challenge)
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("snail-runtime-ready/v1\x00"))
+	mac.Write(nonce)
+	if result.Data.Proof != hex.EncodeToString(mac.Sum(nil)) {
+		t.Fatal("readiness is not bound to this child capability")
 	}
 }
 func TestLocalOfflineOnlyRoutesAndOrigin(t *testing.T) {
