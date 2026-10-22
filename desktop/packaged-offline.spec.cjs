@@ -24,7 +24,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  async function close(){
   if(!child||child.exitCode!==null) return;
   const stopped=new Promise(resolve=>{const timer=setTimeout(()=>resolve(Error('本次管理包没有正常停止')),30000);child.once('exit',code=>{clearTimeout(timer);resolve(code===0?null:Error(`管理包退出码${code}`));});});
-  const result=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'stop.bat')}""`],{env,windowsHide:true,encoding:'utf8',timeout:15000});
+  const result=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'stop.bat')}""`],{env,windowsHide:true,windowsVerbatimArguments:true,encoding:'utf8',timeout:15000});
   const stopError=await stopped;
   assert.equal(result.status,0,result.stderr);if(stopError)throw stopError;
   if(browser?.isConnected()) await browser.close(); browser=undefined;
@@ -33,9 +33,9 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  }
  t.after(async()=>{try{if(page&&!page.isClosed())await page.screenshot({path:path.join(root,'final-window.png'),fullPage:true});}finally{try{await close();}finally{if(child&&child.exitCode===null){fs.writeFileSync(path.join(root,'cleanup-failure.json'),JSON.stringify({normalStop:false,ownedChildPID:child.pid}));child.kill();child.stdout?.destroy();child.stderr?.destroy();}fs.writeFileSync(path.join(root,'process.log'),log);}}});
  async function launch(){
-  child=spawn(executable,['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1',`--user-data-dir=${path.join(root,'diagnostics')}`],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  child=spawn(executable,['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1',`--user-data-dir=${path.join(data,'window-profile')}`],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
   child.stdout.on('data',chunk=>{log+=chunk.toString();});child.stderr.on('data',chunk=>{log+=chunk.toString();fs.writeFileSync(path.join(root,'process.log'),log);});
-  const endpoint=await new Promise((resolve,reject)=>{let stderr='';const timer=setTimeout(()=>{detach();reject(Error('管理包未打开可观察窗口'));},30000);function detach(){clearTimeout(timer);child.stderr.off('data',read);child.off('exit',exit);child.off('error',failed);}function read(chunk){stderr+=chunk;const match=/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[A-Za-z0-9-]+)/.exec(stderr);if(match){detach();resolve(match[1]);}}function exit(code){detach();reject(Error(`管理包提前退出${code}`));}function failed(error){detach();reject(error);}child.stderr.on('data',read);child.once('exit',exit);child.once('error',failed);});
+  const endpoint=await new Promise((resolve,reject)=>{let stderr='';const timer=setTimeout(()=>{detach();reject(Error('管理包未打开可观察窗口'));},30000);function detach(){clearTimeout(timer);child.stderr.off('data',read);child.off('exit',exit);child.off('error',failed);}function read(chunk){stderr+=chunk;const match=/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[A-Za-z0-9-]+)/.exec(stderr);if(match&&stderr.includes('MANAGER_STAGE window-loaded')){detach();resolve(match[1]);}}function exit(code){detach();reject(Error(`管理包提前退出${code}`));}function failed(error){detach();reject(error);}child.stderr.on('data',read);child.once('exit',exit);child.once('error',failed);});
   browser=await chromium.connectOverCDP(endpoint);
   const context=browser.contexts()[0];
   page=context.pages()[0]||await context.waitForEvent('page',{timeout:45000});
@@ -50,7 +50,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await expect(page.getByRole('button',{name:'登录',exact:true})).toBeVisible();
  await page.getByLabel('密码',{exact:true}).fill(ownerPassword);await page.getByRole('button',{name:'登录',exact:true}).click();
  await page.getByRole('button',{name:'新建客户',exact:true}).click();
- await page.getByLabel('客户名称',{exact:true}).fill('安装包合成客户');
+ await page.getByLabel('客户名称',{exact:true}).fill('安装包合成客户');await page.getByLabel('联系方式',{exact:true}).fill('合成联系入口');
  await page.getByRole('button',{name:'保存客户',exact:true}).click();
  await expect(page.getByRole('cell',{name:'安装包合成客户',exact:true})).toBeVisible();
  await expect(page.getByRole('link',{name:'Powered by Keygate',exact:true})).toBeVisible();
@@ -64,17 +64,21 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await page.getByRole('button',{name:'客户',exact:true}).click();await page.getByRole('button',{name:'发放授权',exact:true}).click();
  const issue=page.getByRole('dialog');await issue.getByLabel('完整设备码',{exact:true}).fill('STQ-WIN1-'+'b'.repeat(64));await issue.getByLabel('设备名称',{exact:true}).fill('打包合成设备');
  await issue.getByLabel('天数',{exact:true}).fill('7');await issue.getByRole('button',{name:'核对并预览',exact:true}).click();
- const issuedResponse=page.waitForResponse(reply=>reply.request().method()==='POST'&&new URL(reply.url()).pathname==='/api/v1/admin/offline-licenses');
- await issue.getByRole('button',{name:'确认签发',exact:true}).click();const issued=(await(await issuedResponse).json()).data;
+ await expect(issue.getByRole('button',{name:'确认签发',exact:true})).toBeVisible();
+ const [issuedResponse]=await Promise.all([page.waitForResponse(reply=>reply.request().method()==='POST'&&new URL(reply.url()).pathname==='/api/v1/admin/offline-licenses'),issue.getByRole('button',{name:'确认签发',exact:true}).click()]);const issued=(await issuedResponse.json()).data;
  await expect(issue.getByRole('heading',{name:/签发完成/})).toBeVisible();
- const original=Buffer.from(await page.evaluate(async id=>Array.from(new Uint8Array(await(await fetch('/api/v1/admin/license-issuances/'+id+'/file')).arrayBuffer())),issued.issuanceId));
+ const rows=()=>page.evaluate(async id=>(await(await fetch('/api/v1/admin/license-issuances/'+id+'/deliveries')).json()).data.items,issued.issuanceId);assert.equal((await rows()).length,0);
+ const [download]=await Promise.all([page.waitForEvent('download'),issue.getByRole('button',{name:'下载授权文件',exact:true}).click()]);await download.saveAs(path.join(root,'original.snaillic'));
+ const original=fs.readFileSync(path.join(root,'original.snaillic'));assert.equal((await rows()).length,0);
+ await issue.getByRole('button',{name:'复制交付说明',exact:true}).click();await expect(issue.getByRole('status').filter({hasText:'交付说明已复制'})).toBeVisible();
+ await issue.getByLabel('收件对象',{exact:true}).fill('合成收件入口');await issue.getByLabel('实际交付时间（北京时间）',{exact:true}).fill(new Date(Date.now()+8*60*60*1000).toISOString().slice(0,16));await issue.getByRole('button',{name:'确认登记交付',exact:true}).click();await expect(issue.getByTestId('delivery-status')).toHaveText('已登记交付');assert.equal((await rows()).length,1);
  const protocol=require(path.join(clientRoot,'shared/licensing/protocol-v2.cjs'));
  const checked=protocol.verifyLicense(original,{[publicIdentity.keyId]:publicIdentity.publicKeyPem});assert.equal(checked.payload.revision,1);assert.equal(checked.payload.binding.digest,'b'.repeat(64));assert.equal(createHash('sha256').update(original).digest('hex'),issued.sha256);
  fs.writeFileSync(path.join(root,'original.snaillic'),original);fs.writeFileSync(path.join(root,'public-identity.json'),JSON.stringify(publicIdentity));
  await page.screenshot({path:path.join(root,'issued.png'),fullPage:true});
- const focused=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'run.bat')}""`],{env,windowsHide:true,encoding:'utf8',timeout:15000});assert.equal(focused.status,0,focused.stderr);
+ const focused=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'run.bat')}""`],{env,windowsHide:true,windowsVerbatimArguments:true,encoding:'utf8',timeout:15000});assert.equal(focused.status,0,focused.stderr);
  await close();await launch();await expect(page.getByRole('heading',{name:'客户',exact:true})).toBeVisible();await expect(page.getByRole('cell',{name:'安装包合成客户',exact:true})).toBeVisible();
  const again=Buffer.from(await page.evaluate(async id=>Array.from(new Uint8Array(await(await fetch('/api/v1/admin/license-issuances/'+id+'/file')).arrayBuffer())),issued.issuanceId));assert.deepEqual(again,original);
  await close();
- fs.writeFileSync(path.join(root,'acceptance.json'),JSON.stringify({passed:true,packageSHA256:createHash('sha256').update(fs.readFileSync(executable)).digest('hex'),installedPackage:false,packagedExecutable:true,managerPortable:true,sourceWindow:false,isolatedDataRoot:data,downloadEvidence:'authenticated-original-http',nativeSigningAndPersistence:true,normalStop:true},null,2));
+ fs.writeFileSync(path.join(root,'acceptance.json'),JSON.stringify({passed:true,packageSHA256:createHash('sha256').update(fs.readFileSync(executable)).digest('hex'),installedPackage:false,packagedExecutable:true,managerPortable:true,sourceWindow:false,isolatedDataRoot:data,downloadEvidence:'actual-ui-download-and-byte-verification',manualDelivery:true,clipboard:true,nativeSigningAndPersistence:true,normalStop:true},null,2));
 });

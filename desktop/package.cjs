@@ -60,7 +60,7 @@ async function main() {
         const bytes=fs.readFileSync(path.join(context.appOutDir,'resources/postgresql/bin',file.file));
         if(createHash('sha256').update(bytes).digest('hex')!==file.sha256) throw new Error(`包内微软运行库校验失败 ${file.file}`);
       }
-      for(const file of ['run.bat','stop.bat']) fs.copyFileSync(path.join(__dirname,file),path.join(context.appOutDir,file));
+      for(const file of ['run.bat','stop.bat']) fs.writeFileSync(path.join(context.appOutDir,file),fs.readFileSync(path.join(__dirname,file),'utf8').replace(/\r?\n/g,'\r\n'),'utf8');
       fs.writeFileSync(path.join(context.appOutDir,'源码与许可.txt'),`本包为蜗牛客户与授权中心，基于 Keygate。\r\nPowered by Keygate：https://keygate.app\r\n上游 LICENSE 和 NOTICE 在 resources 目录，随附对应衍生源码与构建说明。\r\n源码候选：${candidate}\r\n运行资料保存在当前用户 AppData/Roaming/SnailLicenseCenter，升级或重装请保留。\r\n`,'utf8');
     },
   }});
