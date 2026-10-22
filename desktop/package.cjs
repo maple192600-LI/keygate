@@ -12,6 +12,14 @@ function requiredDirectory(name) {
 }
 async function main() {
   const postgres = requiredDirectory('SNAIL_POSTGRES_RUNTIME');
+  const crt = requiredDirectory('SNAIL_MSVC_RUNTIME');
+  const nativeLock = require('./native-runtime.lock.json');
+  for (const file of nativeLock.msvc.files) {
+    const bytes=fs.readFileSync(path.join(crt,'dlls',file.file));
+    if(createHash('sha256').update(bytes).digest('hex')!==file.sha256) throw new Error(`微软运行库与固定清单不符 ${file.file}`);
+  }
+  for(const file of ['Microsoft-VCRuntime-LICENSE.txt','Microsoft-VCRuntime-LICENSE.docx'])
+    if(!fs.statSync(path.join(crt,file)).isFile()) throw new Error(`缺少运行库许可 ${file}`);
   const output = requiredDirectory('SNAIL_MANAGER_OUTPUT');
   const candidate = execFileSync('git', ['rev-parse', 'HEAD'], {cwd:root,encoding:'utf8',windowsHide:true}).trim();
   if(execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8',windowsHide:true}).trim()) throw new Error('先固定干净源码候选，再构建交付包。');
@@ -39,12 +47,19 @@ async function main() {
       {from:path.join(postgres,'bin'),to:'postgresql/bin',filter:['*.dll','postgres.exe','pg_ctl.exe','initdb.exe','psql.exe','createdb.exe']},
       {from:path.join(postgres,'lib'),to:'postgresql/lib',filter:['*.dll']},
       {from:path.join(postgres,'share'),to:'postgresql/share'},
+      {from:path.join(crt,'dlls'),to:'postgresql/bin',filter:nativeLock.msvc.files.map(file=>file.file)},
+      ...['Microsoft-VCRuntime-LICENSE.txt','Microsoft-VCRuntime-LICENSE.docx'].map(file=>({from:path.join(crt,file),to:`postgresql/${file}`})),
+      {from:path.join(__dirname,'native-runtime.lock.json'),to:'native-runtime.lock.json'},
       ...['server_license.txt','commandlinetools_3rd_party_licenses.txt'].map(file=>({from:path.join(postgres,file),to:`postgresql/${file}`})),
       ...['LICENSE','NOTICE'].map(file=>({from:path.join(root,file),to:file})),
       {from:path.join(root,'docs/蜗牛客户与授权中心_本地操作说明.md'),to:'中文操作说明.md'},
     ],
     win:{target:['dir','zip'],artifactName:'蜗牛客户与授权中心-${version}-${arch}.${ext}',signAndEditExecutable:true},
     afterPack:context=>{
+      for(const file of nativeLock.msvc.files) {
+        const bytes=fs.readFileSync(path.join(context.appOutDir,'resources/postgresql/bin',file.file));
+        if(createHash('sha256').update(bytes).digest('hex')!==file.sha256) throw new Error(`包内微软运行库校验失败 ${file.file}`);
+      }
       for(const file of ['run.bat','stop.bat']) fs.copyFileSync(path.join(__dirname,file),path.join(context.appOutDir,file));
       fs.writeFileSync(path.join(context.appOutDir,'源码与许可.txt'),`本包为蜗牛客户与授权中心，基于 Keygate。\r\nPowered by Keygate：https://keygate.app\r\n上游 LICENSE 和 NOTICE 在 resources 目录，随附对应衍生源码与构建说明。\r\n源码候选：${candidate}\r\n运行资料保存在当前用户 AppData/Roaming/SnailLicenseCenter，升级或重装请保留。\r\n`,'utf8');
     },

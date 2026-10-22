@@ -122,3 +122,14 @@ Windows沙盒预检已真实执行：联网和剪贴板等关闭，仅映射本�
 测试隔离错误：Electron Windows app.getPath(appData)按系统壳路径，不跟随APPDATA测试环境变量；本次在真实壳路径 C:/Users/Administrator/AppData/Roaming/SnailLicenseCenter 新建了空window-profile（创建时间04:55:21）。没有runtime.json、数据库、owner、客户或签发身份。该空目录为本次测试残留，记录后按归属清理；不将环境变量伪隔离当成有效隔离。正式管理包后续测试限定真实Windows沙盒，核对WDAGUtilityAccount和实际MachineGuid摘要不同于宿主后才启动，使用来宾真实默认目录；不会触碰宿主正式资料。首个失败证据 C:/Users/Administrator/AppData/Local/Temp/snail-manager-package-idQi5d。
 
 Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证据足以归因为等待/RAM .05；整体完成 .02。结果仅帮助核查，非测试通过。
+
+
+### T10 全新 Windows 运行库缺失定位
+
+0f38eee包在实际沙盒仍未通过，证据 sandbox-manager-8e8dcf567fa2497293affe5cf758e4bd。阶段标记确认单实例锁true、app-ready；c515978进一步确认目录权限及秘密资料根检查通过后抛错，不据此猜测线程/等待原因。
+
+直接执行同包postgres.exe、initdb.exe、pg_ctl.exe --version，三者都返回3221225781（0xC0000135）；来宾实际缺MSVCP140.dll及VCRUNTIME140.dll；PE导入表确认依赖这两项。证据 D:/snail-worktrees/commercial-licensing-windows-acceptance-20261023/sandbox-pg-dependencies-c515978/output/postgres-dependencies.json。这个结果证明全新系统运行依赖缺项，不自动证明所有启动错误只来自同一根因；修复后须回到真实包验证。
+
+修复准备：本机已有VS2022 Community，按微软可再发行目录复制正式x64 CRT 14.44.35211，十个DLL原始签名Valid（Microsoft），固定版本及SHA256进入desktop/native-runtime.lock.json；package.cjs强制要求、校验输入及包内字节，附原微软许可，放数据库程序同目录。不是从System32复制或要求用户安装C++环境。另下载签名有效的新版14.51运行库仅作调查，其最终用户条款与VS分发授权须区分；本包选择VS2022既有正式Redist目录，未采用新版临时提取物。尚未把整改后的正式包判通过。
+
+误落宿主壳目录的本任务空window-profile已核对完整路径、创建时间、无既有资料/链接及无运行进程后清理，原始失败目录中保留清单。其他Windows沙盒、客户端、工作树和资料没有被关闭或清理。
