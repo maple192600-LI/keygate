@@ -1,6 +1,6 @@
 # 蜗牛客户与授权中心实施检查点
 
-当前状态：管理端0.1.1已完成原生Windows双击交付包、中文一键入口和原程序位置更新，账号及资料保留，无需Docker。固定管理产品9844b41的实际包已验证五个主页面、四个设置页签、签发下载/手动交付及正常启动停止重开。用户正式签发身份已在本机创建，并完成正式客户包双设备激活、续期、换机和重装；具体客户端证据见配套客户端实施记录。正式客户包运行到期补测、882项Electron整层、最终P0独立审查和交付收尾仍开放，两仓任务分支已推送，尚未合并、未发布。
+当前状态：管理端0.1.1已完成原生Windows双击交付包、中文一键入口和原程序位置更新，账号及资料保留，无需Docker。固定管理产品9844b41实际包已验证五主页面、四设置页签、签发下载/手动交付及正常启停重开。正式身份由用户控制，客户包双设备、续期、换机、重装及r11到期保护实测通过。客户a096dd7包另补齐干净Windows的Microsoft运行库，实际安装授权链、首次管理员门禁、错误证书保留及正常重开卸载通过，补证独立复审No findings。完整源码原运行仍为874通过/8失败、退出1；对应场景隔离定向7/8通过，剩余故障注入测试修正后两变体2/2通过，不冒充整层全绿，也未扩展会计或税务功能。最终P0、Git整合及收尾继续，尚未发布。
 
 ## 固定范围
 
@@ -15,7 +15,7 @@
 | T03 | `desktop/`、`cmd/server/local_offline.go`、`internal/auth/`、`internal/{handler,store}/local_auth.go`、本地认证迁移 | 先生成运行秘密，再 initdb；隔离原生 PostgreSQL 启停；无邮箱 owner、原子唯一初始化、登录/改密/会话撤销、Host/Origin、路由隔离；0.1.1实际Windows包和一键入口启停重开通过 | 最终整体交付复核与收尾；数据层防护见后文 A19 |
 | T04 | `customers.go`、`offline_requests.go`、商业表迁移、`web/src/pages/local-customers.tsx` | 无邮箱客户、同名独立 UUID、来源回读、严格申请及完整设备码、重复申请与冲突；固定包五主页面与四设置页签实测 | 最终P0证据归并 |
 | T05 | `internal/offline/key_store.go`、`internal/service/offline_issuance.go`、对应 handler/store、`local-signing.tsx`、`local-issue.tsx` | Argon2id/AES-GCM 加密身份、Ed25519 原字节签发、事务原件、同操作号并发、锁定及签名/归档/审计后失败无半成品、超过 24 小时原操作重放、原件下载；用户正式身份实际签发三版并独立验签 | 最终独立审查；未解密用户正式私钥，通用移交恢复由隔离工程身份验证 |
-| T07 | `offline_lifecycle.go`、`offline_deliveries.go`、`local-licenses.tsx`、`local-overview.tsx`、`local-state-form.tsx` | 续期/永久/换机/停发恢复、最新版本交付独立状态、原件历史、当前及历史设备、使用显示未回传、客户/授权查询与概览；正式客户安装器双设备续期换机、停发后旧证仍按原期限有效 | 最终P0复核；正式安装包运行到期与完整客户端测试仍待完成 |
+| T07 | `offline_lifecycle.go`、`offline_deliveries.go`、`local-licenses.tsx`、`local-overview.tsx`、`local-state-form.tsx` | 续期/永久/换机/停发恢复、最新版本交付独立状态、原件历史、当前及历史设备、使用显示未回传、客户/授权查询与概览；正式客户安装器双设备续期换机、停发后旧证仍按原期限有效，r11运行到期保护通过 | 最终P0结论、完整客户端结果与收尾仍待完成 |
 
 定向命令在任务专属 Windows/PostgreSQL 环境实际执行；DSN 只从仓库外运行秘密读取，不能写入本文或日志：
 
