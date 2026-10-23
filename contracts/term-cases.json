@@ -1,0 +1,196 @@
+{
+  "source": "01_蜗牛授权管理_开发实施方案.md §13.2；字段名为测试资料结构，不代表管理 API。",
+  "timeZone": "Asia/Shanghai",
+  "timestampFormat": "YYYY-MM-DDTHH:mm:ss.sssZ",
+  "expiryBoundary": "exclusive",
+  "cases": [
+    {
+      "id": "TERM-01",
+      "scenario": "7 天",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2026-10-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "term": {
+          "kind": "days",
+          "value": 7
+        }
+      },
+      "expected": {
+        "anchor": "2026-10-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "expiresAt": "2026-10-29T01:00:00.000Z",
+        "displayExpiresAt": "2026-10-29 09:00:00 北京时间"
+      }
+    },
+    {
+      "id": "TERM-02",
+      "scenario": "平年一月底加一个自然月",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2027-01-31T01:00:00.000Z",
+        "notBefore": "2027-01-31T01:00:00.000Z",
+        "term": {
+          "kind": "months",
+          "value": 1
+        }
+      },
+      "expected": {
+        "anchor": "2027-01-31T01:00:00.000Z",
+        "notBefore": "2027-01-31T01:00:00.000Z",
+        "expiresAt": "2027-02-28T01:00:00.000Z",
+        "displayExpiresAt": "2027-02-28 09:00:00 北京时间"
+      }
+    },
+    {
+      "id": "TERM-03",
+      "scenario": "闰年一月底加一个自然月",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2028-01-31T01:00:00.000Z",
+        "notBefore": "2028-01-31T01:00:00.000Z",
+        "term": {
+          "kind": "months",
+          "value": 1
+        }
+      },
+      "expected": {
+        "anchor": "2028-01-31T01:00:00.000Z",
+        "notBefore": "2028-01-31T01:00:00.000Z",
+        "expiresAt": "2028-02-29T01:00:00.000Z",
+        "displayExpiresAt": "2028-02-29 09:00:00 北京时间"
+      }
+    },
+    {
+      "id": "TERM-04",
+      "scenario": "闰日加十二个自然月",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2028-02-29T01:00:00.000Z",
+        "notBefore": "2028-02-29T01:00:00.000Z",
+        "term": {
+          "kind": "months",
+          "value": 12
+        }
+      },
+      "expected": {
+        "anchor": "2028-02-29T01:00:00.000Z",
+        "notBefore": "2028-02-29T01:00:00.000Z",
+        "expiresAt": "2029-02-28T01:00:00.000Z",
+        "displayExpiresAt": "2029-02-28 09:00:00 北京时间"
+      }
+    },
+    {
+      "id": "TERM-05",
+      "scenario": "指定到期日包含当天",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2026-10-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "term": {
+          "kind": "date",
+          "value": "2026-12-31"
+        }
+      },
+      "expected": {
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "expiresAt": "2026-12-31T16:00:00.000Z",
+        "displayExpiresAt": "2027-01-01 00:00:00 北京时间"
+      }
+    },
+    {
+      "id": "TERM-06",
+      "scenario": "到期前续一个自然月",
+      "note": "原表未指定续期当天时刻；此固定样例统一选择北京时间 10 月 22 日 09:00，截止预期不受该选择影响。",
+      "input": {
+        "action": "renew",
+        "issuedAt": "2026-10-22T01:00:00.000Z",
+        "current": {
+          "notBefore": "2026-09-22T01:00:00.000Z",
+          "expiresAt": "2026-11-22T01:00:00.000Z"
+        },
+        "term": {
+          "kind": "months",
+          "value": 1
+        }
+      },
+      "expected": {
+        "anchor": "2026-11-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "expiresAt": "2026-12-22T01:00:00.000Z",
+        "displayExpiresAt": "2026-12-22 09:00:00 北京时间",
+        "usableAtIssuedAt": true
+      }
+    },
+    {
+      "id": "TERM-07",
+      "scenario": "过期后续七天",
+      "input": {
+        "action": "renew",
+        "issuedAt": "2026-10-22T01:00:00.000Z",
+        "current": {
+          "notBefore": "2026-09-01T01:00:00.000Z",
+          "expiresAt": "2026-10-01T01:00:00.000Z"
+        },
+        "term": {
+          "kind": "days",
+          "value": 7
+        }
+      },
+      "expected": {
+        "anchor": "2026-10-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "expiresAt": "2026-10-29T01:00:00.000Z",
+        "displayExpiresAt": "2026-10-29 09:00:00 北京时间",
+        "usableAtIssuedAt": true
+      }
+    },
+    {
+      "id": "TERM-08",
+      "scenario": "永久",
+      "input": {
+        "action": "initial",
+        "issuedAt": "2026-10-22T01:00:00.000Z",
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "term": {
+          "kind": "permanent"
+        }
+      },
+      "expected": {
+        "notBefore": "2026-10-22T01:00:00.000Z",
+        "expiresAt": null,
+        "displayExpiresAt": "永久"
+      }
+    }
+  ],
+  "assertions": [
+    {
+      "id": "BOUNDARY-01",
+      "caseId": "TERM-01",
+      "now": "2026-10-22T00:59:59.999Z",
+      "expectedUsable": false,
+      "reason": "未到 notBefore"
+    },
+    {
+      "id": "BOUNDARY-02",
+      "caseId": "TERM-01",
+      "now": "2026-10-22T01:00:00.000Z",
+      "expectedUsable": true,
+      "reason": "notBefore 包含边界"
+    },
+    {
+      "id": "BOUNDARY-03",
+      "caseId": "TERM-01",
+      "now": "2026-10-29T00:59:59.999Z",
+      "expectedUsable": true,
+      "reason": "截止前一毫秒"
+    },
+    {
+      "id": "BOUNDARY-04",
+      "caseId": "TERM-01",
+      "now": "2026-10-29T01:00:00.000Z",
+      "expectedUsable": false,
+      "reason": "expiresAt 排他边界"
+    }
+  ]
+}

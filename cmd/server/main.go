@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	urlpath "path"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -233,6 +234,13 @@ func main() {
 	defer db.Close()
 
 	logger := newLogger(os.Stdout)
+	if cfg.IsLocalOffline() {
+		if err := runLocalOffline(cfg, db, logger); err != nil {
+			logger.Error("本地管理端停止", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Optional Redis/Valkey backend for rate limiting shared across
 	// instances. Falls back to in-memory when REDIS_URL is unset or
@@ -1407,7 +1415,7 @@ func serveFrontend(r *gin.Engine) {
 		// Try to serve a static file using path.Clean to prevent traversal.
 		// Uses c.File() instead of c.FileFromFS() to avoid http.FileServer's
 		// implicit 301 redirects (e.g. /index.html → /).
-		if clean := filepath.Clean(path); clean != "/" && clean != "/index.html" {
+		if clean := urlpath.Clean(path); clean != "/" && clean != "/index.html" {
 			filePath := filepath.Join(distPath, clean)
 			if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
 				if strings.HasPrefix(clean, "/assets/") {

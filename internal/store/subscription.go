@@ -38,6 +38,13 @@ func SyncLicenseSubscriptionIn(ctx context.Context, db bun.IDB, licenseID string
 	if plan == nil {
 		return nil
 	}
+	var online bool
+	if err := db.NewRaw("SELECT fulfillment_mode='online' FROM licenses WHERE id=?", licenseID).Scan(ctx, &online); err != nil {
+		return err
+	}
+	if !online {
+		return nil
+	}
 	// Newest first, as FindSubscriptionByLicense reads it: nothing
 	// stops a licence having more than one row (license_id carries an
 	// index, not a unique constraint), and an unordered LIMIT 1 would

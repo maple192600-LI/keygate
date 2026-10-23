@@ -38,6 +38,7 @@ Thumbs.db
 web/node_modules/
 web/dist/
 web/.vite/
+desktop/node_modules/
 
 # Test artifacts
 tests/

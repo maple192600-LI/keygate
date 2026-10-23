@@ -1,0 +1,64 @@
+package auth
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"errors"
+	"golang.org/x/crypto/argon2"
+	"strings"
+	"unicode/utf8"
+)
+
+const passwordPrefix = "$argon2id$v=19$m=65536,t=3,p=1$"
+
+func ValidPassword(password string) bool {
+	return utf8.ValidString(password) && utf8.RuneCountInString(password) >= 10 && utf8.RuneCountInString(password) <= 128 && len(password) <= 512
+}
+func HashPassword(password string) (string, error) {
+	if !ValidPassword(password) {
+		if !utf8.ValidString(password) {
+			return "", errors.New("密码中含有无法识别的字符，请重新输入")
+		}
+		if utf8.RuneCountInString(password) < 10 {
+			return "", errors.New("密码太短，请至少输入10个字符")
+		}
+		return "", errors.New("密码太长，最多可输入128个字符")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 1, 32)
+	return passwordPrefix + base64.RawStdEncoding.EncodeToString(salt) + "$" + base64.RawStdEncoding.EncodeToString(key), nil
+}
+func passwordParts(encoded string) ([]byte, []byte, bool) {
+	if !strings.HasPrefix(encoded, passwordPrefix) {
+		return nil, nil, false
+	}
+	pieces := strings.Split(strings.TrimPrefix(encoded, passwordPrefix), "$")
+	if len(pieces) != 2 {
+		return nil, nil, false
+	}
+	salt, err := base64.RawStdEncoding.Strict().DecodeString(pieces[0])
+	if err != nil || len(salt) != 16 {
+		return nil, nil, false
+	}
+	expected, err := base64.RawStdEncoding.Strict().DecodeString(pieces[1])
+	if err != nil || len(expected) != 32 {
+		return nil, nil, false
+	}
+	return salt, expected, true
+}
+func ValidPasswordHash(encoded string) bool { _, _, ok := passwordParts(encoded); return ok }
+func VerifyPassword(encoded, password string) bool {
+	if !ValidPassword(password) {
+		return false
+	}
+	salt, expected, ok := passwordParts(encoded)
+	if !ok {
+		return false
+	}
+	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 1, 32)
+	return subtle.ConstantTimeCompare(key, expected) == 1
+}
