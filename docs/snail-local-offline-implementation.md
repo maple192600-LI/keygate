@@ -206,4 +206,8 @@ Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证
 
 PR2已合入413604e，随后远端复核指出空身份登记及活动身份损坏两项遗漏。已用实际PostgreSQL新用例在原候选复现：空身份备份/业务包被误判损坏；活动容器截断后可信完整备份无法确认。修正空KeyID/公钥且无历史为未登记状态，null、半缺字段或空登记与签发历史并存仍拒绝。活动身份损坏时仅以可信登记身份及完整原件连续性校验同身份备份，并要求原签发密码实际解锁候选后才能切换；结构完整但密文损坏、错密码、缺替换身份及原件缺失均拒绝。密码只在异常恢复时输入，不写日志、数据库或运行配置。
 
-首次重启任务数据库遗漏原端口，两次测试连接拒绝，属于环境失败；按隔离runtime端口38269重启后才取得功能红绿证据。四项Go定向通过，其中原件连续性、零签发约束保持。真实Electron已先验证空备份恢复、首次建身份和损坏容器的可信恢复；后续新增解锁输入正在复测。初轮新增完整流程因加入前置恢复后仍与最初JWT比较而失败，改为端口占用前快照，只检查端口重选不变更凭据；旧失败保留。另修正恢复密码字段只传恢复API，避免向业务包导入传未知字段，原业务包协议不扩大。
+首次重启任务数据库遗漏原端口，两次测试连接拒绝，属于环境失败；按隔离runtime端口38269重启后才取得功能红绿证据。四项Go定向通过，其中原件连续性、零签发约束保持。初轮新增完整流程因加入前置恢复后仍与最初JWT比较而失败，改为端口占用前快照，只检查端口重选不变更凭据；旧失败保留。另修正恢复密码字段只传恢复API，避免向业务包导入传未知字段，原业务包协议不扩大。bdb8cfe的真实Electron 1/1通过（34.70秒），日志manager-unlock-electron-r2.log，覆盖空备份恢复、首次建身份、损坏容器后缺原签发密码、错密码保留输入及正确密码恢复，随后完成业务包移交、端口重选与关闭重开；独立审查未发现该候选代码问题。
+
+复审进一步指出缺失文件会报告uncreated而非错误。恢复包含已登记原身份的备份时，缺失与损坏活动容器均须实际解锁候选；仍允许不带身份的备份保留已登记公钥、等待后来导入原身份，不允许改建其他身份。新增missing子场景在bdb8cfe失败，修复后与corrupt子场景共同通过；两者均覆盖缺密码、错密码、同身份正常恢复后继续r2及结构有效但GCM密文不可解的拒绝，源库原件仍为r1。
+
+最终复测使用已运行的隔离PostgreSQL。`go test ./internal/service -run '^TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity$' -count=1`通过（5.813秒）；恢复相关两项组合通过（9.000秒）。重新`go build -o bin/snail-license-center.exe ./cmd/server`后，`SNAIL_CLIENT_ROOT=<本任务客户端工作树> SNAIL_MANAGER_TEST_POSTGRES=<已核验PostgreSQL> node --test desktop/local-offline.spec.cjs`再次1/1通过（31.41秒），证据为Temp/snail-keygate-t03-61ag04。完整日志manager-missing-red.log、manager-missing-green.log、manager-recovery-final.log和manager-missing-electron-final.log收录于本轮交付证据；源码提交身份及最终独立复审结果在交付回执记录。没有生成正式新包、读取正式私钥或替换用户原程序。

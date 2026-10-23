@@ -246,6 +246,15 @@ func TestOfflineUnregisteredEmptyBackupAndBundleRemainUsable(t *testing.T) {
 	}
 }
 func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "corrupt"
+		if missing {
+			name = "missing"
+		}
+		t.Run(name, func(t *testing.T) { testOfflineRestoreUnavailableActiveIdentity(t, missing) })
+	}
+}
+func testOfflineRestoreUnavailableActiveIdentity(t *testing.T, missing bool) {
 	ctx := context.Background()
 	backup, svc, actor, first, base := sourceBackupService(t)
 	public, err := backup.Keys.Status()
@@ -274,11 +283,21 @@ func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *te
 		t.Fatal(err)
 	}
 	backup.Keys = active
-	if err = os.WriteFile(filepath.Join(activeRoot, "keys", "signing-identity.json"), []byte("{"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = active.Status(); err == nil {
-		t.Fatal("fault did not corrupt active container")
+	activeFile := filepath.Join(activeRoot, "keys", "signing-identity.json")
+	if missing {
+		if err = os.Remove(activeFile); err != nil {
+			t.Fatal(err)
+		}
+		if status, e := active.Status(); e != nil || status.State != "uncreated" {
+			t.Fatal("fault did not remove active container", e)
+		}
+	} else {
+		if err = os.WriteFile(activeFile, []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = active.Status(); err == nil {
+			t.Fatal("fault did not corrupt active container")
+		}
 	}
 	for _, test := range []struct {
 		raw   []byte
@@ -312,8 +331,8 @@ func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *te
 			if e != nil || next.Revision != 2 {
 				t.Fatal("recovery did not preserve signing sequence", e)
 			}
-		} else if e == nil {
-			t.Fatal("corrupt active key accepted backup without replacement")
+		} else if (e == nil) != missing {
+			t.Fatal("identity-free restore changed the unavailable-key policy", e)
 		}
 		if e = backup.DiscardRestore(ctx, candidate); e != nil {
 			t.Fatal(e)

@@ -273,9 +273,14 @@ func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c 
 	if expected.KeyID != "" && expected.KeyID != restored.KeyID {
 		return backupFailure("备份缺少当前已登记的签发身份")
 	}
+	// A missing container reports "uncreated" rather than an error. Replacing
+	// that registered identity still requires proving the candidate can unlock.
+	if physical.KeyID == "" && expected.KeyID != "" && c.IncludesIdentity {
+		damagedIdentity = true
+	}
 	if damagedIdentity {
 		if signingPassphrase == "" {
-			return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件损坏，请填写原签发密码验证备份中的身份后恢复"}
+			return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件缺失或损坏，请填写原签发密码验证备份中的身份后恢复"}
 		}
 		keys := offline.NewKeyStore(c.IdentityRoot)
 		defer keys.Lock()
