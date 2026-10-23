@@ -1,6 +1,6 @@
 # 蜗牛客户与授权中心实施检查点
 
-状态：源码开发中，未发布；当前运行入口仍为开发 Electron 主程序，不是正式双击交付包。
+当前状态：管理端0.1.1已完成原生Windows双击交付包、中文一键入口和原程序位置更新，账号及资料保留，无需Docker。固定管理产品9844b41的实际包已验证五个主页面、四个设置页签、签发下载/手动交付及正常启动停止重开。用户正式签发身份已在本机创建，并完成正式客户包双设备激活、续期、换机和重装；具体客户端证据见配套客户端实施记录。正式客户包运行到期补测、882项Electron整层、最终P0独立审查和交付收尾仍开放，两仓任务分支已推送，尚未合并、未发布。
 
 ## 固定范围
 
@@ -12,10 +12,10 @@
 
 | 工作包 | 实际路径 | 已验证行为 | 尚未完成 |
 | --- | --- | --- | --- |
-| T03 | `desktop/`、`cmd/server/local_offline.go`、`internal/auth/`、`internal/{handler,store}/local_auth.go`、本地认证迁移 | 先生成运行秘密，再 initdb；隔离原生 PostgreSQL 启停；无邮箱 owner、原子唯一初始化、登录/改密/会话撤销、Host/Origin、路由隔离 | 正式管理包、一键入口的安装验证；数据层防护见后文 A19 |
-| T04 | `customers.go`、`offline_requests.go`、商业表迁移、`web/src/pages/local-customers.tsx` | 无邮箱客户、同名独立 UUID、来源回读、严格申请及完整设备码、重复申请与冲突 | 最终整体页面验收 |
-| T05 | `internal/offline/key_store.go`、`internal/service/offline_issuance.go`、对应 handler/store、`local-signing.tsx`、`local-issue.tsx` | Argon2id/AES-GCM 加密身份、Ed25519 原字节签发、事务原件、同操作号并发、锁定及签名/归档/审计后失败无半成品、超过 24 小时原操作重放、原件下载 | 最终独立审查及真实正式身份交接 |
-| T07 | `offline_lifecycle.go`、`offline_deliveries.go`、`local-licenses.tsx`、`local-overview.tsx`、`local-state-form.tsx` | 续期/永久/换机/停发恢复、最新版本交付独立状态、原件历史、当前及历史设备、使用显示未回传、客户/授权查询与概览 | 最终 P0 场景、复制说明和身份移交完整验收 |
+| T03 | `desktop/`、`cmd/server/local_offline.go`、`internal/auth/`、`internal/{handler,store}/local_auth.go`、本地认证迁移 | 先生成运行秘密，再 initdb；隔离原生 PostgreSQL 启停；无邮箱 owner、原子唯一初始化、登录/改密/会话撤销、Host/Origin、路由隔离；0.1.1实际Windows包和一键入口启停重开通过 | 最终整体交付复核与收尾；数据层防护见后文 A19 |
+| T04 | `customers.go`、`offline_requests.go`、商业表迁移、`web/src/pages/local-customers.tsx` | 无邮箱客户、同名独立 UUID、来源回读、严格申请及完整设备码、重复申请与冲突；固定包五主页面与四设置页签实测 | 最终P0证据归并 |
+| T05 | `internal/offline/key_store.go`、`internal/service/offline_issuance.go`、对应 handler/store、`local-signing.tsx`、`local-issue.tsx` | Argon2id/AES-GCM 加密身份、Ed25519 原字节签发、事务原件、同操作号并发、锁定及签名/归档/审计后失败无半成品、超过 24 小时原操作重放、原件下载；用户正式身份实际签发三版并独立验签 | 最终独立审查；未解密用户正式私钥，通用移交恢复由隔离工程身份验证 |
+| T07 | `offline_lifecycle.go`、`offline_deliveries.go`、`local-licenses.tsx`、`local-overview.tsx`、`local-state-form.tsx` | 续期/永久/换机/停发恢复、最新版本交付独立状态、原件历史、当前及历史设备、使用显示未回传、客户/授权查询与概览；正式客户安装器双设备续期换机、停发后旧证仍按原期限有效 | 最终P0复核；正式安装包运行到期与完整客户端测试仍待完成 |
 
 定向命令在任务专属 Windows/PostgreSQL 环境实际执行；DSN 只从仓库外运行秘密读取，不能写入本文或日志：
 
@@ -33,7 +33,7 @@ Windows `pg_ctl start` 捕获标准流会因后台数据库继承管道而挂起
 
 实际 UI 核对发现过浮层未继承局部主题和交付登记后摘要不更新，已修正并在原生窗口复测。未靠增加重试或跳过断言掩盖失败。
 
-## 后续依赖
+## 早期检查点的后续依赖（进展见当前状态及末节）
 
 客户端 T08 已有独立源码候选和真实到期流程证据，见客户端任务记录；T09 源码和原生窗口已实现并验证，仍待本包独立审查及原客户续期导入的跨仓补证；T10 两个正式 Windows 包、用户控制的正式身份、原生安装、真实不同 MachineGuid 验证尚未完成；最后固定候选执行完整检查、独立审查和第 13 节 P0。现阶段不能用于真实商业客户交付。
 
