@@ -178,3 +178,14 @@ Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证
 `node --test desktop/local-offline.spec.cjs` 最新 1/1 通过（25.30 秒），证据 `C:/Users/Administrator/AppData/Local/Temp/snail-keygate-t03-xmQB0X`，日志 `D:/snail-worktrees/commercial-licensing-windows-acceptance-20261023/manager-all-ui-source-8.log`。新增概览内停发/恢复分别核对 1/0、实际登记交付后待交付归零；正常新建两名同名客户，以邮箱/备注区分，人工注入查询网络失败后旧项全部禁用，同条件重试恢复，再选择乙方核对签发预览不串甲方。首次新增检查因两张概览表均含详情按钮而选择不唯一；第二次在模态框打开时访问被无障碍隔离的背景按钮，均为测试定位错误，已按最近发放区域和关闭后状态修正，未放宽业务预期。
 
 四个直接修改页面 Biome check 与 `VITE_SNAIL_DEPLOYMENT=local_offline VITE_SNAIL_MANAGER_VERSION=0.1.1 bun run build` 通过。此段仍为源码真实 Electron 结果；实际固定包、原路径更新及用户当前程序检查分别补记，不能用另一目录的包替代实际更新。
+
+
+### 原位置实际更新与管理包验证（9844b41）
+
+固定候选 9844b41eea99cd86fd4361a835c27d21ff0ec019 的四页整改已独立复审 No findings（不代替运行验证）。完整管理构建入口在空输出第一次因 7za 返回 unspecified error 退出 2；同文件单独压缩成功，未确证压缩失败根因。保留原日志，再从新空输出执行正常入口成功，产物 `manager-all-ui-9844b41-r2`，ZIP SHA256 a51c0dca8ec9ab8640c55694b8f3cb5cf11f4b000dff44cb4d169426cc84ebd2。
+
+实际 Windows 沙盒固定包 `node --test desktop/packaged-offline.spec.cjs` 1/1 通过（17.84 秒），证据 `D:/snail-worktrees/commercial-licensing-windows-acceptance-20261023/sandbox-manager-all-ui-9844b41/output/snail-manager-package-Ysq60b`。实际首次设置短密码拒绝保留输入、登录、无邮箱/长名客户、五个页面与四个设置页签、原始签名下载、交付登记、交付列表原件下载字节一致、正常启动/停止 BAT、关闭重开及原件保留通过。管理服务/数据库正常退出；沙盒 guest 正常完成，主机沙盒客户端关闭通知后来无响应，经核对其父 PID 属本次 launcher198812 后，仅清除了已结束测试的客户端 PID291248，见 client-cleanup.json。没有结束其他任务或修改网络安全设置。
+
+本轮已实际正常关闭用户原管理端及 PostgreSQL，按旧包逐文件核对原路径无独有修改后，在 `E:/360Downloads/蜗牛客户与授权中心_本地版_f781f4e/管理端` 只更新 8 个程序文件，并对全部1620文件核对新包哈希。`AppData/Roaming/SnailLicenseCenter` 的 runtime.json 原字节哈希不变，未重置账号、资料或创建替代签发身份；正常资源管理器用户环境重新打开同一原路径，原会话保留。客户、概览、授权、交付四个实际页面已核对新版布局，证据 manager-in-place-upgrade-9844b41；设置页最后巡检暂被另一任务的 Zulu Windows 网络权限弹窗遮挡，未代改其权限，因此不把该页写成本轮原实例已检查。固定包内设置四页签已检查通过。
+
+原文件夹名称保留便于原入口继续使用，内容已更新为0.1.1；根目录补中文 `启动管理端.bat`，交付0.1.1 ZIP、对应源码ZIP、中文操作说明与准确的管理包实际验收.json。前一轮只在新目录复制包没有更新用户原程序，不能视作当时已完成实际更新。本轮仅证明上述管理端工程和实际更新；正式客户安装包、完整客户端测试与P0仍未全部完成。
