@@ -141,11 +141,12 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   const uuid=require('node:crypto').randomUUID;
   const repairRequest={formatVersion:1,kind:'license-recovery-request',productId:'cn.snailfinance.desktop',requestId:uuid(),installationId:uuid(),challenge:uuid(),
     device:{type:'windows-machineguid-sha256/v1',digest:'a'.repeat(64)},stateFingerprint:'b'.repeat(64),appVersion:'0.1.2',protectedWallMs:Date.now()+86400000};
+  await signer.locator('summary').click();
   await signer.getByLabel('修复申请',{exact:true}).setInputFiles({name:'synthetic.snailreq',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(repairRequest))});
-  await signer.getByLabel('管理密码',{exact:true}).fill('Synthetic-window-password-2026');
+  await expect(signer.getByLabel('管理密码',{exact:true})).toHaveCount(0);
   const repairOutput=path.join(root,'ui-repair.snailrepair');
   await electron.evaluate(({session},file)=>{session.defaultSession.once('will-download',(_event,item)=>item.setSavePath(file));},repairOutput);
-  await signer.getByRole('button',{name:'签发修复文件',exact:true}).click();
+  await signer.getByRole('button',{name:'生成并保存修复文件',exact:true}).click();
   await expect.poll(()=>fs.existsSync(repairOutput)).toBe(true);
   const repaired=protocol.verifyRecovery(fs.readFileSync(repairOutput),{[publicIdentity.keyId]:publicIdentity.publicKeyPem});
   assert.equal(repaired.requestId,repairRequest.requestId);assert.equal(repaired.stateFingerprint,repairRequest.stateFingerprint);

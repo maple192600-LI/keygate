@@ -21,8 +21,7 @@ export default function LocalSigningIdentity() {
     [preview, setPreview] = useState<{ previewId: string; keyId: string; matchesHistory: boolean } | null>(null)
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("")
-  const [repairFile, setRepairFile] = useState<File | null>(null),
-    [repairPassword, setRepairPassword] = useState("")
+  const [repairFile, setRepairFile] = useState<File | null>(null)
   const fileGeneration = useRef(0)
   const [readingFile, setReadingFile] = useState(false)
   async function refresh() {
@@ -293,50 +292,39 @@ export default function LocalSigningIdentity() {
         </>
       )}
       {identity?.state === "ready" && (
-        <form
-          className="grid max-w-lg grid-cols-2 gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void perform(async () => {
-              if (!repairFile) throw new Error("请选择修复申请")
-              const requestFile = await readLocalFile(repairFile, 65536)
-              await localDownload("/admin/offline-key/recovery", "蜗牛授权修复.snailrepair", {
-                requestFile,
-                ownerPassword: repairPassword,
+        <details>
+          <summary className="cursor-pointer text-sm">处理客户授权故障</summary>
+          <form
+            className="grid max-w-lg grid-cols-2 gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void perform(async () => {
+                if (!repairFile) throw new Error("请选择修复申请")
+                const requestFile = await readLocalFile(repairFile, 65536)
+                await localDownload("/admin/offline-key/recovery", "蜗牛授权修复.snailrepair", {
+                  requestFile,
+                })
               })
-              setRepairPassword("")
-            })
-          }}
-        >
-          <div className="grid gap-2">
-            <Label htmlFor="repair-request">修复申请</Label>
-            <Input
-              id="repair-request"
-              type="file"
-              accept=".snailreq"
-              disabled={busy}
-              required
-              onChange={(event) => setRepairFile(event.target.files?.[0] || null)}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="repair-password">管理密码</Label>
-            <Input
-              id="repair-password"
-              type="password"
-              autoComplete="current-password"
-              disabled={busy}
-              required
-              value={repairPassword}
-              onChange={(event) => setRepairPassword(event.target.value)}
-            />
-          </div>
-          <div className="col-span-2">
-            <Button type="submit" disabled={busy || !repairFile}>
-              签发修复文件
-            </Button>
-          </div>
-        </form>
+            }}
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="repair-request">修复申请</Label>
+              <Input
+                id="repair-request"
+                type="file"
+                accept=".snailreq"
+                disabled={busy}
+                required
+                onChange={(event) => setRepairFile(event.target.files?.[0] || null)}
+              />
+            </div>
+            <div className="col-span-2">
+              <Button type="submit" disabled={busy || !repairFile}>
+                生成并保存修复文件
+              </Button>
+            </div>
+          </form>
+        </details>
       )}
     </section>
   )

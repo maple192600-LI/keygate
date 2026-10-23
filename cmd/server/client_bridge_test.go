@@ -213,7 +213,7 @@ func TestLocalOfflineElectronBridge(t *testing.T) {
 		if err != nil {
 			t.Fatal("client repair request not exported")
 		}
-		status, body = b.call(t, "POST", "/api/v1/admin/offline-key/recovery", map[string]string{"requestFile": string(repair), "ownerPassword": targetPassword})
+		status, body = b.call(t, "POST", "/api/v1/admin/offline-key/recovery", map[string]string{"requestFile": string(repair)})
 		if status != 200 {
 			t.Fatalf("repair signing %d %s", status, body)
 		}
