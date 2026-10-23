@@ -95,11 +95,26 @@ function readSecrets(file) {
   Object.defineProperty(value, runtimeConfigDigest, { value: createHash('sha256').update(raw).digest('hex') });
   return value;
 }
+async function availableRuntimePort(dataRoot, config, key) {
+  try { await freePort(config[key]); return config; }
+  catch (error) { if (error.code !== 'EADDRINUSE') throw error; }
+  let port;
+  do { port = await freePort(0); } while (port === config.appPort || port === config.databasePort);
+  const file = path.join(dataRoot, 'runtime.json'), temporary = path.join(dataRoot, 'runtime-' + randomBytes(16).toString('hex') + '.tmp');
+  const value = { ...config, [key]: port };
+  const fd=fs.openSync(temporary,'wx',0o600);
+  try { fs.writeFileSync(fd,JSON.stringify(value));fs.fsyncSync(fd); } finally {fs.closeSync(fd);}
+  try {
+    if (readSecrets(file)[runtimeConfigDigest] !== config[runtimeConfigDigest]) throw new Error('运行配置已变化，请重新启动；原资料保留。');
+    fs.renameSync(temporary,file);
+    return readSecrets(file);
+  } finally {if(fs.existsSync(temporary))fs.unlinkSync(temporary);}
+}
 async function secrets(dataRoot) {
   directory(dataRoot); secureDirectory(dataRoot);
   process.stderr.write('MANAGER_STAGE secrets-root-ready\n');
   const file = path.join(dataRoot, 'runtime.json');
-  if (fs.existsSync(file)) return readSecrets(file);
+  if (fs.existsSync(file)) return availableRuntimePort(dataRoot, readSecrets(file), 'appPort');
   if (fs.existsSync(path.join(dataRoot, 'postgres'))) throw new Error('已有数据库但运行秘密缺失，请恢复配套备份；不能自动换密码。');
   let appPort;
   try { appPort = await freePort(9000); } catch { appPort = await freePort(0); }
@@ -140,7 +155,7 @@ async function waitForHealth(address, child, token, deadline = 30000) {
 
 async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutable, nativePaths = false }) {
   // No database process or web service may start before these secrets exist.
-  const config = await secrets(dataRoot);
+  let config = await secrets(dataRoot);
   process.stderr.write('MANAGER_STAGE config-ready\n');
   const native = nativePaths ? nativePostgresPaths(dataRoot, postgresRoot) : { dataRoot, postgresRoot };
   const cluster = path.join(native.dataRoot, 'postgres');
@@ -158,6 +173,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   try { execFileSync(pg('pg_ctl'), ['status', '-D', cluster], { windowsHide: true, stdio: 'ignore' }); running = true; } catch (error) { if (error.status !== 3) throw new Error('无法确认本机数据库状态，请保留资料并检查运行日志。'); }
   // On Windows pg_ctl's detached postgres child can inherit captured pipe
   // handles even with -l. No captured pipes may outlive this startup command.
+  if (!running) config = await availableRuntimePort(dataRoot, config, 'databasePort');
   if (!running) execute(pg('pg_ctl'), ['start', '-D', cluster, '-l', path.join(native.dataRoot, 'logs', 'postgres.log'), '-o', `-h 127.0.0.1 -p ${config.databasePort} -c timezone=UTC`, '-w', '-t', '20'], { stdio: 'ignore' });
   let databaseStopped = false;
   function stopDatabase() {
@@ -185,7 +201,7 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
     if (config.databaseName) throw new Error('恢复后的数据库不存在，请保留运行配置和原资料，不要重新初始化。');
     execute(pg('createdb'), [...databaseArgs, databaseName], { env: pgEnv });
   }
-  await freePort(config.appPort);
+  config = await availableRuntimePort(dataRoot, config, 'appPort');
   const address = `http://127.0.0.1:${config.appPort}`;
   const shutdownToken = randomBytes(32).toString('hex');
   const log = fs.openSync(path.join(logs, 'server.log'), 'a', 0o600);
@@ -218,4 +234,4 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   return { address, stop, setupToken: shutdownToken };
   } catch (error) { try { await stop(); } catch (shutdownError) { throw new AggregateError([error, shutdownError], '管理端启动及关闭失败，请保留运行日志与资料。'); }; throw error; }
 }
-module.exports = { startRuntime, secrets, waitForHealth, nativePostgresPaths, privateMappingDirectory };
+module.exports = { startRuntime, secrets, availableRuntimePort, waitForHealth, nativePostgresPaths, privateMappingDirectory };

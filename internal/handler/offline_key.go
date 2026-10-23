@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"github.com/tabloy/keygate/internal/auth"
 	"github.com/tabloy/keygate/internal/model"
@@ -35,20 +36,29 @@ func (h *OfflineKeyHandler) ownerPassword(c *gin.Context, password string) bool 
 	return true
 }
 func (h *OfflineKeyHandler) historyKey(ctx context.Context) (string, error) {
-	var ids []string
-	if err := h.Store.DB.NewRaw("SELECT DISTINCT key_id FROM license_issuances").Scan(ctx, &ids); err != nil {
+	physical, err := h.Keys.Status()
+	if err != nil {
 		return "", err
 	}
-	if len(ids) > 1 {
-		return "", &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发历史包含不同身份，请保留资料并核对"}
-	}
-	if len(ids) == 1 {
-		return ids[0], nil
-	}
-	return "", nil
+	expected, err := h.Store.ExpectedSigningIdentity(ctx, physical)
+	return expected.KeyID, err
 }
 func (h *OfflineKeyHandler) audit(c *gin.Context, keyID, action string) error {
 	return store.RunInTx(c, h.Store.DB, func(ctx context.Context, tx bun.Tx) error {
+		physical, err := h.Keys.Status()
+		if err != nil {
+			return err
+		}
+		if _, err = h.Store.ExpectedSigningIdentity(ctx, physical); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(physical)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO settings(key,value) VALUES('snail_public_identity',?) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", string(raw)); err != nil {
+			return err
+		}
 		return store.LocalAuditIn(ctx, tx, c.GetString("user_id"), "offline-signing-identity", keyID, action, nil)
 	})
 }
@@ -58,16 +68,16 @@ func (h *OfflineKeyHandler) Public(c *gin.Context) {
 		localOfflineError(c, err)
 		return
 	}
-	history, err := h.historyKey(c)
+	expected, err := h.Store.ExpectedSigningIdentity(c, public)
 	if err != nil {
 		localOfflineError(c, err)
 		return
 	}
-	if history != "" && public.KeyID != "" && history != public.KeyID {
-		localOfflineError(c, &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发身份与历史记录不一致，请保留资料并导入原身份"})
-		return
+	if public.State == "uncreated" && expected.KeyID != "" {
+		public.KeyID = expected.KeyID
+		public.PublicKeyPEM = expected.PublicKeyPEM
 	}
-	response.OK(c, gin.H{"identity": public, "hasHistory": history != ""})
+	response.OK(c, gin.H{"identity": public, "hasHistory": expected.KeyID != ""})
 }
 func (h *OfflineKeyHandler) Create(c *gin.Context) {
 	var input struct {
@@ -83,7 +93,7 @@ func (h *OfflineKeyHandler) Create(c *gin.Context) {
 		return
 	}
 	if history != "" {
-		response.Err(c, 409, "SIGNING_IDENTITY_EXISTS", "已有签发历史，请导入原签发身份，不能新建替换")
+		response.Err(c, 409, "SIGNING_IDENTITY_EXISTS", "已有签发身份登记，请导入原签发身份，不能新建替换")
 		return
 	}
 	public, err := h.Keys.Create(input.Passphrase, c.MustGet("local_session_expiry").(time.Time))
@@ -129,6 +139,45 @@ func (h *OfflineKeyHandler) Unlock(c *gin.Context) {
 func (h *OfflineKeyHandler) Lock(c *gin.Context) {
 	h.Keys.Lock()
 	response.OK(c, gin.H{"locked": true})
+}
+func (h *OfflineKeyHandler) Recovery(c *gin.Context) {
+	var input struct {
+		RequestFile   string `json:"requestFile"`
+		OwnerPassword string `json:"ownerPassword"`
+	}
+	if !LocalJSON(c, &input) || !h.ownerPassword(c, input.OwnerPassword) {
+		return
+	}
+	r, err := offline.ParseRecoveryRequest([]byte(input.RequestFile))
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	expected, err := h.historyKey(c)
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	id := store.NewID()
+	raw, p, err := h.Keys.SignRecovery(r, id, time.Now())
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	if expected != "" && expected != p.KeyID {
+		localOfflineError(c, &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发身份与已登记公钥不一致"})
+		return
+	}
+	err = store.RunInTx(c, h.Store.DB, func(ctx context.Context, tx bun.Tx) error {
+		return store.LocalAuditIn(ctx, tx, c.GetString("user_id"), "offline-license-recovery", id, "sign", map[string]any{
+			"requestId": r.RequestID, "installationId": r.InstallationID, "stateFingerprint": r.StateFingerprint, "baselineAt": p.BaselineAt})
+	})
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="snail-license-recovery.snailrepair"`)
+	c.Data(200, "application/json", raw)
 }
 func (h *OfflineKeyHandler) ExportEncrypted(c *gin.Context) {
 	raw, err := h.Keys.EncryptedIdentity()

@@ -132,6 +132,7 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	owner.GET("/admin/offline-key/encrypted", keyHandler.ExportEncrypted)
 	owner.POST("/admin/offline-key/import/preview", authRate, keyHandler.ImportPreview)
 	owner.POST("/admin/offline-key/import", authRate, keyHandler.Import)
+	owner.POST("/admin/offline-key/recovery", authRate, keyHandler.Recovery)
 	issuance := &handler.OfflineLicenseHandler{Service: &service.OfflineIssuanceService{Store: db, Keys: keys, PreviewSecret: []byte(cfg.JWTSecret)}}
 	owner.POST("/admin/offline-licenses/preview", issuance.Preview)
 	owner.POST("/admin/offline-licenses", issuance.Issue("initial"))

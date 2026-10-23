@@ -197,4 +197,28 @@ func TestLocalOfflineElectronBridge(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "handoff-result.json"), bytes, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if os.Getenv("SNAIL_ELECTRON_BRIDGE_RECOVERY") == "1" {
+		deadline := time.Now().Add(60 * time.Second)
+		var repair []byte
+		for time.Now().Before(deadline) {
+			repair, err = os.ReadFile(filepath.Join(root, "client-repair.snailreq"))
+			if err == nil {
+				break
+			}
+			if _, e := os.Stat(filepath.Join(root, "cancel")); e == nil {
+				t.Fatal("repair bridge canceled")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal("client repair request not exported")
+		}
+		status, body = b.call(t, "POST", "/api/v1/admin/offline-key/recovery", map[string]string{"requestFile": string(repair), "ownerPassword": targetPassword})
+		if status != 200 {
+			t.Fatalf("repair signing %d %s", status, body)
+		}
+		if err = os.WriteFile(filepath.Join(root, "client-repair.snailrepair"), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

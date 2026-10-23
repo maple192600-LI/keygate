@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,22 +60,7 @@ func (s *OfflineBackupService) PublicIdentity(ctx context.Context) (offline.Publ
 	if err != nil {
 		return p, err
 	}
-	if p.KeyID != "" {
-		p.State = "public"
-		return p, nil
-	}
-	raw, err := s.Store.GetSetting(ctx, "snail_public_identity")
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, nil
-	}
-	if err != nil {
-		return p, err
-	}
-	if err = json.Unmarshal([]byte(raw), &p); err != nil {
-		return p, err
-	}
-	p.State = "public"
-	return p, nil
+	return s.Store.ExpectedSigningIdentity(ctx, p)
 }
 func (s *OfflineBackupService) ExportBusiness(ctx context.Context) ([]byte, error) {
 	p, err := s.PublicIdentity(ctx)
@@ -248,12 +232,61 @@ func (s *OfflineBackupService) PreviewRestore(ctx context.Context, raw []byte, p
 			return nil, err
 		}
 	}
+	if _, err = candidate.Store.ExpectedSigningIdentity(ctx, payload.PublicIdentity); err != nil {
+		return nil, err
+	}
 	if err = candidate.Store.SetSetting(ctx, "snail_public_identity", mustJSON(payload.PublicIdentity)); err != nil {
 		return nil, err
 	}
 	return candidate, nil
 }
 func mustJSON(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+
+// Called at confirmation while the local write gate is held. Preview age alone
+// cannot protect originals issued after the preview or after an old backup.
+func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c *RestoreCandidate) error {
+	if c == nil || c.Store == nil {
+		return backupFailure("恢复候选不可用")
+	}
+	physical, err := s.Keys.Status()
+	if err != nil {
+		return err
+	}
+	expected, err := s.Store.ExpectedSigningIdentity(ctx, physical)
+	if err != nil {
+		return err
+	}
+	restored, err := c.Store.ExpectedSigningIdentity(ctx, offline.PublicIdentity{})
+	if err != nil {
+		return err
+	}
+	if expected.KeyID != "" && expected.KeyID != restored.KeyID {
+		return backupFailure("备份缺少当前已登记的签发身份")
+	}
+	type fact struct {
+		LicenseID string
+		Revision  int64
+		ID        string
+		SHA256    string `bun:"sha256"`
+	}
+	var current, candidate []fact
+	if err = s.Store.DB.NewRaw("SELECT license_id,revision,id,sha256 FROM license_issuances").Scan(ctx, &current); err != nil {
+		return err
+	}
+	if err = c.Store.DB.NewRaw("SELECT license_id,revision,id,sha256 FROM license_issuances").Scan(ctx, &candidate); err != nil {
+		return err
+	}
+	known := make(map[string]fact, len(candidate))
+	for _, row := range candidate {
+		known[row.ID] = row
+	}
+	for _, row := range current {
+		if got, ok := known[row.ID]; !ok || got != row {
+			return &offline.Error{Code: "RESTORE_ISSUANCE_ROLLBACK", Message: "备份缺少本机已签发原件或包含同版冲突，不能切换；请使用最新备份或先补齐签发记录"}
+		}
+	}
+	return nil
+}
 func (s *OfflineBackupService) DiscardRestore(ctx context.Context, c *RestoreCandidate) error {
 	expectedName := "snail_restore_" + strings.ReplaceAll(c.ID, "-", "")
 	if !offline.ValidUUID4(c.ID) || c.DatabaseName != expectedName || c.Store == s.Store {
