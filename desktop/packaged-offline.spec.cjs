@@ -59,7 +59,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await expect(page.getByRole('button',{name:'查询',exact:true})).toBeFocused();
  await page.keyboard.press('Tab');await expect(page.getByRole('button',{name:'刷新',exact:true})).toBeFocused();
  await page.screenshot({path:path.join(root,'customers-empty.png'),fullPage:true});
- for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录'],['settings','设置']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();if(label!=='设置')await expect(page.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);await page.screenshot({path:path.join(root,'empty-'+key+'.png'),fullPage:true});}
+ for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录'],['settings','设置']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();if(label!=='设置')await expect(page.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport({ratio:1});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);await page.screenshot({path:path.join(root,'empty-'+key+'.png'),fullPage:true});}
  for(const label of ['基本信息','签发身份','备份与数据','操作记录']){await page.getByRole('tab',{name:label,exact:true}).click();await expect(page.getByRole('tab',{name:label,exact:true})).toHaveAttribute('aria-selected','true');await page.screenshot({path:path.join(root,'settings-'+label+'.png'),fullPage:true});}
  await page.getByRole('button',{name:'客户',exact:true}).click();
  await page.getByRole('button',{name:'新建客户',exact:true}).click();
@@ -73,7 +73,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await expect(page.getByRole('cell',{name:longName,exact:true})).toBeVisible();
  await page.screenshot({path:path.join(root,'customers-populated.png'),fullPage:true});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
- await expect(page.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport();
+ await expect(page.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport({ratio:1});
  await page.getByLabel('查询客户',{exact:true}).fill('安装包合成客户');await page.getByRole('button',{name:'查询',exact:true}).click();
  await expect(page.getByRole('cell',{name:longName,exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'查看档案',exact:true}).click();await expect(page.getByLabel('邮箱',{exact:true})).toHaveValue('');
@@ -106,7 +106,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await page.screenshot({path:path.join(root,'issued.png'),fullPage:true});
  const focused=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'run.bat')}""`],{env,windowsHide:true,windowsVerbatimArguments:true,encoding:'utf8',timeout:15000});assert.equal(focused.status,0,focused.stderr);
  await issue.getByRole('button',{name:/^(关闭|Close)$/}).click();
- for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();await page.screenshot({path:path.join(root,'populated-'+key+'.png'),fullPage:true});}
+ for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();if(key==='overview'){await expect(page.getByRole('button',{name:'有效授权 1',exact:true})).toBeVisible();await expect(page.getByRole('button',{name:'待交付文件 0',exact:true})).toBeVisible();}await expect(page.getByRole('row').filter({hasText:'安装包合成客户'})).not.toHaveCount(0);await page.screenshot({path:path.join(root,'populated-'+key+'.png'),fullPage:true});}
  await expect(page.getByRole('combobox',{name:'交付状态',exact:true})).toHaveValue('');
  await expect(page.getByRole('cell',{name:'合成收件入口',exact:true})).toBeVisible();
  const [deliveryDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'下载原件',exact:true}).click()]);

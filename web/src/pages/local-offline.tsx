@@ -221,6 +221,7 @@ export default function LocalOfflineApp() {
               )}
               {page === "overview" && (
                 <LocalOverview
+                  epoch={epoch}
                   onManage={manageLicense}
                   onCreate={createLicense}
                   onNavigate={(target, soon, term) => {

@@ -18,13 +18,16 @@ export default function LocalOverview({
   onNavigate,
   onCreate,
   onManage,
+  epoch,
 }: {
   onNavigate: (target: "customers" | "licenses" | "delivery", expiring?: boolean, term?: "active") => void
   onCreate: () => void
   onManage: LicenseAction
+  epoch: number
 }) {
   const [state, setState] = useState<Overview | null>(null)
   const [error, setError] = useState("")
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch refreshes summary after the issuance dialog closes.
   useEffect(() => {
     let alive = true
     localRequest<Overview>("/admin/overview")
@@ -37,7 +40,7 @@ export default function LocalOverview({
     return () => {
       alive = false
     }
-  }, [])
+  }, [epoch])
   const cards = [
     { label: "已登记客户", count: state?.customers, icon: Users, open: () => onNavigate("customers") },
     { label: "有效授权", count: state?.valid, icon: KeyRound, open: () => onNavigate("licenses", false, "active") },
@@ -71,8 +74,8 @@ export default function LocalOverview({
       </div>
       <div className="lc-overview-columns">
         <div className="lc-overview-lists">
-          <LocalLicenses compact title="最近发放" onManage={onManage} />
-          <LocalLicenses compact initialExpiring title="30天内到期" onManage={onManage} />
+          <LocalLicenses epoch={epoch} compact title="最近发放" onManage={onManage} />
+          <LocalLicenses epoch={epoch} compact initialExpiring title="30天内到期" onManage={onManage} />
         </div>
         <aside className="lc-overview-aside">
           <section className="lc-task-panel">

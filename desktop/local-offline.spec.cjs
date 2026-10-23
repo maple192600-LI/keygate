@@ -65,7 +65,8 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await window.screenshot({path:path.join(root,'ui-customers-empty.png'),fullPage:true});
   for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录'],['settings','设置']]){
     await window.getByRole('button',{name:label,exact:true}).click();await expect(window.getByRole('heading',{name:label,exact:true})).toBeVisible();
-    if(label!=='设置')await expect(window.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport();
+    fs.appendFileSync(path.join(root,'nav-layout.jsonl'),JSON.stringify({label,layout:await window.evaluate(()=>{const r=(e)=>{const b=e.getBoundingClientRect();return {x:b.x,y:b.y,width:b.width,height:b.height,right:b.right}};return {width:innerWidth,scroll:document.documentElement.scrollWidth,heading:r(document.querySelector('.lc-page-heading')),section:r(document.querySelector('main>section')||document.querySelector('.lc-settings')),buttons:[...document.querySelectorAll('.lc-page-heading button')].map(r)}})})+'\n');
+    if(label!=='设置')await expect(window.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport({ratio:1});
     assert.equal(await window.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await window.screenshot({path:path.join(root,'ui-empty-'+key+'.png'),fullPage:true});
   }
@@ -92,12 +93,12 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await window.getByRole('dialog',{name:'客户档案',exact:true}).getByRole('button',{name:/^(关闭|Close)$/}).click();
   await electron.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1120,720));
   assert.equal(await window.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'最小窗口不能产生整页横向溢出');
-  await expect(window.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport();
+  await expect(window.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport({ratio:1});
   await window.screenshot({path:path.join(root,'ui-customers-minimum.png'),fullPage:true});
   await window.getByRole('button',{name:'查看档案',exact:true}).click();
   const narrowDrawer=window.getByRole('dialog',{name:'客户档案',exact:true}),scrollBody=narrowDrawer.locator('.lc-drawer-body');
   await scrollBody.hover();await window.mouse.wheel(0,1000);
-  await expect(narrowDrawer.getByRole('button',{name:/^(关闭|Close)$/})).toBeInViewport();
+  await expect(narrowDrawer.getByRole('button',{name:/^(关闭|Close)$/})).toBeInViewport({ratio:1});
   await window.screenshot({path:path.join(root,'ui-customer-drawer-minimum-bottom.png'),fullPage:true});
   await narrowDrawer.getByRole('button',{name:/^(关闭|Close)$/}).click();
 
@@ -115,8 +116,9 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(signer.getByRole('status')).toHaveText('已就绪');
   const publicIdentity=await window.evaluate(async()=>{const reply=await fetch('/api/v1/admin/offline-key/public');return (await reply.json()).data.identity;});
   assert.ok(publicIdentity.publicKeyPem.startsWith('-----BEGIN PUBLIC KEY-----'));
-  await window.getByRole('button', {name:'客户',exact:true}).click();
+  await window.getByRole('button', {name:'概览',exact:true}).click();
   await window.getByRole('button', {name:'发放授权',exact:true}).click();
+  await window.getByRole('dialog',{name:'选择客户',exact:true}).getByRole('button',{name:/窗口合成客户/}).click();
   const issue=window.getByRole('dialog');
   await issue.getByLabel('完整设备码',{exact:true}).fill('STQ-WIN1-'+'a'.repeat(64));
   await issue.getByLabel('设备名称',{exact:true}).fill('窗口合成设备');
@@ -151,6 +153,10 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   assert.equal(deliveries[0].deliveredAt,'2026-10-22T18:00:00Z');
   await window.screenshot({path:path.join(root,'issued-delivered.png'),fullPage:true});
   await issue.getByRole('button',{name:/^(关闭|Close)$/}).click();
+  await expect(window.getByRole('button',{name:'有效授权 1',exact:true})).toBeVisible();
+  await expect(window.getByRole('button',{name:'待交付文件 0',exact:true})).toBeVisible();
+  await expect(window.getByRole('row').filter({hasText:'窗口合成客户'})).not.toHaveCount(0);
+  await window.screenshot({path:path.join(root,'ui-overview-after-issue.png'),fullPage:true});
   await window.getByRole('button',{name:'授权',exact:true}).click();
   await window.getByRole('button',{name:'查看详情',exact:true}).click();
   let details=window.getByRole('dialog',{name:'授权详情',exact:true});
