@@ -5,6 +5,21 @@ const http=require('node:http');
 const {createHmac,randomBytes}=require('node:crypto');
 const {waitForHealth}=require('./runtime.cjs');
 
+test('已保存的应用端口被占用时重分配，原数据库与运行秘密保持',async t=>{
+ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{secrets}=require('./runtime.cjs');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'snail-port-reopen-'));
+ t.after(()=>fs.rmSync(root,{recursive:true}));
+ const first=await secrets(root),file=path.join(root,'runtime.json');
+ const listener=http.createServer();
+ await new Promise(resolve=>listener.listen(first.appPort,'127.0.0.1',resolve));
+ t.after(()=>new Promise(resolve=>listener.close(resolve)));
+ const next=await secrets(root);
+ assert.notEqual(next.appPort,first.appPort);
+ for(const key of ['databasePort','databasePassword','jwtSecret','encryptionSecret'])assert.equal(next[key],first[key]);
+ assert.equal(JSON.parse(fs.readFileSync(file)).appPort,next.appPort);
+ assert.equal(listener.listening,true);
+});
+
 async function server(t,reply){
   const listener=http.createServer(reply);
   await new Promise(resolve=>listener.listen(0,'127.0.0.1',resolve));

@@ -139,7 +139,7 @@ func (h *OfflineBackupHandler) PreviewBusiness(c *gin.Context) {
 		localOfflineError(c, err)
 		return
 	}
-	public, err := h.Service.Keys.Status()
+	public, err := h.Service.PublicIdentity(c)
 	if err != nil {
 		localOfflineError(c, err)
 		return
@@ -173,7 +173,7 @@ func (h *OfflineBackupHandler) ConfirmBusiness(c *gin.Context) {
 		response.Err(c, 409, "PREVIEW_EXPIRED", "预览已失效，请重新选择文件")
 		return
 	}
-	current, err := h.Service.Keys.Status()
+	current, err := h.Service.PublicIdentity(c)
 	if err != nil {
 		localOfflineError(c, err)
 		return
@@ -254,6 +254,10 @@ func (h *OfflineBackupHandler) ConfirmRestore(c *gin.Context) {
 	p, ok := h.restores[input.PreviewID]
 	if !ok || p.owner != c.GetString("user_id") || p.candidate.Store == nil || time.Now().After(p.candidate.ExpiresAt) {
 		response.Err(c, 409, "PREVIEW_EXPIRED", "恢复预览已失效，请重新选择文件")
+		return
+	}
+	if err := h.Service.ValidateRestoreContinuity(c, p.candidate); err != nil {
+		localOfflineError(c, err)
 		return
 	}
 	// The restored account and JWTs are invalidated before selecting this DB.

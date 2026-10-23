@@ -279,10 +279,17 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await electron.close(); electron = null;
   const stopped = spawnSync(path.join(postgresRoot, 'bin/pg_ctl.exe'), ['status', '-D', path.join(data, 'postgres')], { windowsHide: true, encoding: 'utf8' });
   assert.equal(stopped.status, 3, stopped.stdout + stopped.stderr);
+  const net=require('node:net'),savedRuntime=JSON.parse(secrets),blockers=[];
+  for(const port of [savedRuntime.appPort,savedRuntime.databasePort]) {
+    const blocker=net.createServer();await new Promise(resolve=>blocker.listen(port,'127.0.0.1',resolve));blockers.push(blocker);
+  }
   const reopened = await launch();
+  for(const blocker of blockers)await new Promise(resolve=>blocker.close(resolve));
   await expect(reopened.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   await expect(reopened.getByRole('heading', { name: '首次设置', exact: true })).toHaveCount(0);
-  assert.deepEqual(fs.readFileSync(path.join(data, 'runtime.json')), secrets);
+  const relocated=JSON.parse(fs.readFileSync(path.join(data,'runtime.json')));
+  assert.notEqual(relocated.appPort,savedRuntime.appPort);assert.notEqual(relocated.databasePort,savedRuntime.databasePort);
+  for(const key of ['databasePassword','jwtSecret','encryptionSecret'])assert.equal(relocated[key],savedRuntime[key]);
   await reopened.getByLabel('管理用户名', { exact: true }).fill('synthetic_owner');
   await reopened.getByLabel('密码', { exact: true }).fill('Synthetic-window-password-2026');
   await reopened.getByRole('button', { name: '登录', exact: true }).click();
@@ -317,6 +324,22 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(dataDialog.getByText('已包含',{exact:true})).toBeVisible();
   await dataDialog.getByLabel('当前管理密码',{exact:true}).fill('Synthetic-window-password-2026');
   await dataDialog.getByRole('button',{name:'确认恢复并重新登录',exact:true}).click();
+  await expect(dataDialog.getByRole('alert')).toContainText('备份缺少本机已签发原件');
+  await dataDialog.getByRole('button',{name:/^(关闭|Close)$/}).click();
+  const latestBackup=path.join(root,'latest.snailbackup');
+  await reopened.getByRole('button',{name:'备份资料',exact:true}).click();
+  dataDialog=reopened.getByRole('dialog',{name:'备份资料',exact:true});
+  await dataDialog.getByLabel('备份密码',{exact:true}).fill('Synthetic-native-backup-password');
+  await dataDialog.getByLabel('确认备份密码',{exact:true}).fill('Synthetic-native-backup-password');
+  await dataDialog.getByLabel('包含加密签发身份',{exact:true}).check();reopened.once('dialog',dialog=>dialog.accept());
+  await saveDownload(dataDialog,latestBackup,'生成备份');
+  await reopened.getByRole('button',{name:'恢复备份',exact:true}).click();
+  dataDialog=reopened.getByRole('dialog',{name:'恢复备份',exact:true});
+  await dataDialog.getByLabel('加密备份文件',{exact:true}).setInputFiles(latestBackup);
+  await dataDialog.getByLabel('备份密码',{exact:true}).fill('Synthetic-native-backup-password');
+  await dataDialog.getByRole('button',{name:'验证并预览',exact:true}).click();
+  await dataDialog.getByLabel('当前管理密码',{exact:true}).fill('Synthetic-window-password-2026');
+  await dataDialog.getByRole('button',{name:'确认恢复并重新登录',exact:true}).click();
   await expect(reopened.getByRole('button',{name:'登录',exact:true})).toBeVisible();
   await reopened.getByLabel('管理用户名',{exact:true}).fill('synthetic_owner');
   await reopened.getByLabel('密码',{exact:true}).fill('Synthetic-window-password-2026');
@@ -325,7 +348,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await reopened.getByRole('button',{name:'查看详情',exact:true}).click();
   details=reopened.getByRole('dialog',{name:'授权详情',exact:true});
   await expect(details.getByRole('cell',{name:'2',exact:true})).toBeVisible();
-  await expect(details.getByRole('cell',{name:'4',exact:true})).toHaveCount(0);
+  await expect(details.getByRole('cell',{name:'4',exact:true})).toBeVisible();
   const restoredRuntime=fs.readFileSync(path.join(data,'runtime.json'));
   assert.ok(JSON.parse(restoredRuntime).databaseName.startsWith('snail_restore_'));
   await reopened.screenshot({path:path.join(root,'restored-manager.png'),fullPage:true});
@@ -363,7 +386,23 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await target.getByRole('tab',{name:'签发身份',exact:true}).click();
   const targetSigner=target.getByTestId('signing-identity');
   await expect(targetSigner.getByRole('button',{name:'创建签发身份',exact:true})).toBeDisabled();
-  await targetSigner.getByLabel('加密签发身份文件',{exact:true}).setInputFiles(identityFile);
+  const identityInput=targetSigner.getByLabel('加密签发身份文件',{exact:true});
+  await identityInput.setInputFiles(identityFile);
+  await identityInput.setInputFiles({name:'too-large.json',mimeType:'application/json',buffer:Buffer.alloc(65537)});
+  await expect(targetSigner.getByRole('alert')).toContainText('文件超过');
+  await expect(targetSigner.getByRole('button',{name:'预览签发身份',exact:true})).toBeDisabled();
+  await identityInput.setInputFiles({name:'bad-utf8.json',mimeType:'application/json',buffer:Buffer.from([255])});
+  await expect(targetSigner.getByRole('alert')).toContainText('UTF-8');
+  await expect(targetSigner.getByRole('button',{name:'预览签发身份',exact:true})).toBeDisabled();
+  await target.evaluate(()=>{
+    const original=File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer=function(){if(this.name!=='slow-A.json')return original.call(this);
+      return new Promise(resolve=>{window.releaseSigningA=async()=>resolve(await original.call(this));});};
+    window.restoreSigningRead=()=>{File.prototype.arrayBuffer=original;};
+  });
+  await identityInput.setInputFiles({name:'slow-A.json',mimeType:'application/json',buffer:Buffer.from('{"synthetic":"stale-A"}')});
+  await identityInput.setInputFiles(identityFile);
+  await target.evaluate(async()=>{await window.releaseSigningA();window.restoreSigningRead();});
   await targetSigner.getByLabel('签发密码',{exact:true}).fill('Synthetic-window-signing-password');
   await targetSigner.getByRole('button',{name:'预览签发身份',exact:true}).click();
   await targetSigner.getByLabel('管理密码',{exact:true}).fill('Synthetic-handoff-owner-password');

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -21,6 +21,10 @@ export default function LocalSigningIdentity() {
     [preview, setPreview] = useState<{ previewId: string; keyId: string; matchesHistory: boolean } | null>(null)
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("")
+  const [repairFile, setRepairFile] = useState<File | null>(null),
+    [repairPassword, setRepairPassword] = useState("")
+  const fileGeneration = useRef(0)
+  const [readingFile, setReadingFile] = useState(false)
   async function refresh() {
     const result = await localRequest<{ identity: SigningIdentity; hasHistory: boolean }>("/admin/offline-key/public")
     setIdentity(result.identity)
@@ -41,6 +45,7 @@ export default function LocalSigningIdentity() {
         if (alive) setError(cause.message)
       })
     return () => {
+      fileGeneration.current++
       alive = false
     }
   }, [])
@@ -64,7 +69,14 @@ export default function LocalSigningIdentity() {
         if (passphrase !== confirm) throw new Error("两次签发密码输入不一致")
         await localRequest("/admin/offline-key/create", { ownerPassword, passphrase })
       } else if (!preview) {
-        setPreview(await localRequest("/admin/offline-key/import/preview", { identityFile, passphrase }))
+        if (readingFile || !identityFile) throw new Error("请先选择并完整读取签发身份文件")
+        const generation = fileGeneration.current
+        const result = await localRequest<{ previewId: string; keyId: string; matchesHistory: boolean }>(
+          "/admin/offline-key/import/preview",
+          { identityFile, passphrase },
+        )
+        if (generation !== fileGeneration.current) return
+        setPreview(result)
         setPassphrase("")
         return
       } else await localRequest("/admin/offline-key/import", { previewId: preview.previewId, ownerPassword })
@@ -188,11 +200,18 @@ export default function LocalSigningIdentity() {
                   disabled={busy}
                   onChange={async (event) => {
                     const file = event.target.files?.[0]
+                    const generation = ++fileGeneration.current
+                    setFile("")
                     setPreview(null)
+                    setError("")
+                    setReadingFile(Boolean(file))
                     try {
-                      setFile(file ? await readLocalFile(file, 65536) : "")
+                      const raw = file ? await readLocalFile(file, 65536) : ""
+                      if (generation === fileGeneration.current) setFile(raw)
                     } catch (cause) {
-                      setError((cause as Error).message)
+                      if (generation === fileGeneration.current) setError((cause as Error).message)
+                    } finally {
+                      if (generation === fileGeneration.current) setReadingFile(false)
                     }
                   }}
                   required
@@ -247,7 +266,14 @@ export default function LocalSigningIdentity() {
               </div>
             )}
             <div className="col-span-2">
-              <Button type="submit" disabled={busy || (!uncreated && identity.state !== "locked")}>
+              <Button
+                type="submit"
+                disabled={
+                  busy ||
+                  (importing && !preview && (readingFile || !identityFile)) ||
+                  (!uncreated && identity.state !== "locked")
+                }
+              >
                 {busy
                   ? "正在处理…"
                   : identity.state === "locked"
@@ -261,6 +287,52 @@ export default function LocalSigningIdentity() {
             </div>
           </form>
         </>
+      )}
+      {identity?.state === "ready" && (
+        <form
+          className="grid max-w-lg grid-cols-2 gap-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void perform(async () => {
+              if (!repairFile) throw new Error("请选择修复申请")
+              const requestFile = await readLocalFile(repairFile, 65536)
+              await localDownload("/admin/offline-key/recovery", "蜗牛授权修复.snailrepair", {
+                requestFile,
+                ownerPassword: repairPassword,
+              })
+              setRepairPassword("")
+            })
+          }}
+        >
+          <div className="grid gap-2">
+            <Label htmlFor="repair-request">修复申请</Label>
+            <Input
+              id="repair-request"
+              type="file"
+              accept=".snailreq"
+              disabled={busy}
+              required
+              onChange={(event) => setRepairFile(event.target.files?.[0] || null)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="repair-password">管理密码</Label>
+            <Input
+              id="repair-password"
+              type="password"
+              autoComplete="current-password"
+              disabled={busy}
+              required
+              value={repairPassword}
+              onChange={(event) => setRepairPassword(event.target.value)}
+            />
+          </div>
+          <div className="col-span-2">
+            <Button type="submit" disabled={busy || !repairFile}>
+              签发修复文件
+            </Button>
+          </div>
+        </form>
       )}
     </section>
   )

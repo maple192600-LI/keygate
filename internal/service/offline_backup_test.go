@@ -90,6 +90,106 @@ func blankBackupTarget(t *testing.T) (*store.Store, *offline.KeyStore, string) {
 	t.Cleanup(keys.Lock)
 	return s, keys, owner.ID
 }
+
+func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
+	ctx := context.Background()
+	backup, svc, actor, first, base := sourceBackupService(t)
+	raw, err := backup.Backup(ctx, "Synthetic-backup-continuity", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := backup.PreviewRestore(ctx, raw, "Synthetic-backup-continuity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := backup.DiscardRestore(ctx, candidate); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err = backup.ValidateRestoreContinuity(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	for revision := int64(1); revision <= 2; revision++ {
+		intent := OfflineIntent{Action: "renew", LicenseID: first.LicenseID, ExpectedRevision: revision, Term: offline.Term{Kind: "days", Amount: 7}}
+		if _, err = svc.Issue(ctx, actor, prepareOfflineCommand(t, svc, intent)); err != nil {
+			t.Fatal(err)
+		}
+		if err = backup.ValidateRestoreContinuity(ctx, candidate); err == nil {
+			t.Fatal("old preview erased newer issuance")
+		}
+	}
+	if got := countOfflineRows(t, svc.Store, "license_issuances"); got != 3 {
+		t.Fatal("source changed", got)
+	}
+	latest, err := backup.Backup(ctx, "Synthetic-backup-continuity", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := backup.PreviewRestore(ctx, latest, "Synthetic-backup-continuity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := backup.DiscardRestore(ctx, current); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err = backup.ValidateRestoreContinuity(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	keys := offline.NewKeyStore(current.IdentityRoot)
+	defer keys.Lock()
+	if _, err = keys.Unlock("Synthetic-service-signing-password", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	restored := &OfflineIssuanceService{Store: current.Store, Keys: keys, PreviewSecret: bytes.Repeat([]byte{5}, 32), clock: func() time.Time { return base }}
+	next, err := restored.Issue(ctx, actor, prepareOfflineCommand(t, restored, OfflineIntent{Action: "renew", LicenseID: first.LicenseID, ExpectedRevision: 3, Term: offline.Term{Kind: "days", Amount: 7}}))
+	if err != nil || next.Revision != 4 {
+		t.Fatal("trusted latest restore did not continue at r4", next, err)
+	}
+}
+
+func TestOfflineRegisteredPublicIdentityConstrainsZeroIssuance(t *testing.T) {
+	ctx := context.Background()
+	target, keys, _ := blankBackupTarget(t)
+	source := offline.NewKeyStore(t.TempDir())
+	defer source.Lock()
+	public, err := source.Create("Synthetic-zero-history-key", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = target.SetSetting(ctx, "snail_public_identity", mustJSON(public)); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := target.ExpectedSigningIdentity(ctx, offline.PublicIdentity{})
+	if err != nil || expected.KeyID != public.KeyID {
+		t.Fatal("zero-issuance expected key lost", err)
+	}
+	wrong := offline.NewKeyStore(t.TempDir())
+	defer wrong.Lock()
+	wrongPublic, err := wrong.Create("Synthetic-wrong-history-key", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = target.ExpectedSigningIdentity(ctx, wrongPublic); err == nil {
+		t.Fatal("registered A replaced by B")
+	}
+	original, err := source.EncryptedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = keys.Import(original, expected.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := keys.Unlock("Synthetic-zero-history-key", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = target.ExpectedSigningIdentity(ctx, physical); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
 	ctx := context.Background()
 	backup, source, actor, first, base := sourceBackupService(t)

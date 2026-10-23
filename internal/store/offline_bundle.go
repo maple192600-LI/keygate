@@ -368,6 +368,9 @@ func (s *Store) ImportBusinessBundle(ctx context.Context, b *BusinessBundle, act
 	if s.LicenseKeyAEAD == nil {
 		return summary, bundleError("本机加密配置不可用")
 	}
+	if _, err := s.ExpectedSigningIdentity(ctx, b.PublicIdentity); err != nil {
+		return summary, err
+	}
 	previewRollback := fmt.Errorf("business preview complete")
 	err := s.DB.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := AllowOfflineWriteIn(ctx, tx, "bundle"); err != nil {

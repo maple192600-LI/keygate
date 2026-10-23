@@ -230,7 +230,7 @@ func decodeObject(raw []byte, limit int, target any, names ...string) (map[strin
 	// same integer. Preserve exact decimal semantics before decoding the
 	// Go struct; neither overflow nor floating-point rounding may grant a
 	// different revision.
-	for _, name := range []string{"formatVersion", "revision"} {
+	for _, name := range []string{"formatVersion", "revision", "protectedWallMs"} {
 		value, exists := obj[name]
 		if !exists {
 			continue
