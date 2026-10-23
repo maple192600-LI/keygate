@@ -116,6 +116,18 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(signer.getByRole('status')).toHaveText('已就绪');
   const publicIdentity=await window.evaluate(async()=>{const reply=await fetch('/api/v1/admin/offline-key/public');return (await reply.json()).data.identity;});
   assert.ok(publicIdentity.publicKeyPem.startsWith('-----BEGIN PUBLIC KEY-----'));
+  const protocol=require(path.join(clientRoot,'shared/licensing/protocol-v2.cjs'));
+  const uuid=require('node:crypto').randomUUID;
+  const repairRequest={formatVersion:1,kind:'license-recovery-request',productId:'cn.snailfinance.desktop',requestId:uuid(),installationId:uuid(),challenge:uuid(),
+    device:{type:'windows-machineguid-sha256/v1',digest:'a'.repeat(64)},stateFingerprint:'b'.repeat(64),appVersion:'0.1.2',protectedWallMs:Date.now()+86400000};
+  await signer.getByLabel('修复申请',{exact:true}).setInputFiles({name:'synthetic.snailreq',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(repairRequest))});
+  await signer.getByLabel('管理密码',{exact:true}).fill('Synthetic-window-password-2026');
+  const repairOutput=path.join(root,'ui-repair.snailrepair');
+  await electron.evaluate(({session},file)=>{session.defaultSession.once('will-download',(_event,item)=>item.setSavePath(file));},repairOutput);
+  await signer.getByRole('button',{name:'签发修复文件',exact:true}).click();
+  await expect.poll(()=>fs.existsSync(repairOutput)).toBe(true);
+  const repaired=protocol.verifyRecovery(fs.readFileSync(repairOutput),{[publicIdentity.keyId]:publicIdentity.publicKeyPem});
+  assert.equal(repaired.requestId,repairRequest.requestId);assert.equal(repaired.stateFingerprint,repairRequest.stateFingerprint);
   await window.getByRole('button', {name:'概览',exact:true}).click();
   await window.getByRole('button', {name:'发放授权',exact:true}).click();
   await window.getByRole('dialog',{name:'选择客户',exact:true}).getByRole('button',{name:/窗口合成客户/}).click();
@@ -136,7 +148,6 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await electron.evaluate(({session},file)=>{session.defaultSession.once('will-download',(_event,item)=>{item.setSavePath(file);});},original);
   await issue.getByRole('button',{name:'下载授权文件',exact:true}).click();
   await expect.poll(()=>fs.existsSync(original)).toBe(true);
-  const protocol=require(path.join(clientRoot,'shared/licensing/protocol-v2.cjs'));
   const verified=protocol.verifyLicense(fs.readFileSync(original),{[publicIdentity.keyId]:publicIdentity.publicKeyPem});
   assert.equal(verified.payload.binding.digest,'a'.repeat(64));assert.equal(verified.payload.revision,1);
   assert.equal(Date.parse(verified.payload.expiresAt)-Date.parse(verified.payload.notBefore),7*24*60*60*1000);
@@ -385,6 +396,8 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(dataDialog).toHaveCount(0);
   await target.getByRole('tab',{name:'签发身份',exact:true}).click();
   const targetSigner=target.getByTestId('signing-identity');
+  await expect(targetSigner.getByRole('status')).toHaveText('缺少原签发身份，请导入');
+  await expect(targetSigner.getByText(publicIdentity.keyId,{exact:true})).toBeVisible();
   await expect(targetSigner.getByRole('button',{name:'创建签发身份',exact:true})).toBeDisabled();
   const identityInput=targetSigner.getByLabel('加密签发身份文件',{exact:true});
   await identityInput.setInputFiles(identityFile);

@@ -68,16 +68,16 @@ func (h *OfflineKeyHandler) Public(c *gin.Context) {
 		localOfflineError(c, err)
 		return
 	}
-	history, err := h.historyKey(c)
+	expected, err := h.Store.ExpectedSigningIdentity(c, public)
 	if err != nil {
 		localOfflineError(c, err)
 		return
 	}
-	if history != "" && public.KeyID != "" && history != public.KeyID {
-		localOfflineError(c, &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发身份与历史记录不一致，请保留资料并导入原身份"})
-		return
+	if public.State == "uncreated" && expected.KeyID != "" {
+		public.KeyID = expected.KeyID
+		public.PublicKeyPEM = expected.PublicKeyPEM
 	}
-	response.OK(c, gin.H{"identity": public, "hasHistory": history != ""})
+	response.OK(c, gin.H{"identity": public, "hasHistory": expected.KeyID != ""})
 }
 func (h *OfflineKeyHandler) Create(c *gin.Context) {
 	var input struct {

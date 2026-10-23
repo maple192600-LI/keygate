@@ -94,7 +94,11 @@ export default function LocalSigningIdentity() {
     <section className="grid gap-5 rounded-xl border bg-card p-6" data-testid="signing-identity">
       <div className="flex items-center gap-3">
         <span className="lc-signing-status" role="status">
-          {identity ? { uncreated: "未创建", locked: "已锁定", ready: "已就绪" }[identity.state] : "正在读取"}
+          {hasHistory && uncreated
+            ? "缺少原签发身份，请导入"
+            : identity
+              ? { uncreated: "未创建", locked: "已锁定", ready: "已就绪" }[identity.state]
+              : "正在读取"}
         </span>
         <Button variant="outline" disabled={busy} onClick={() => void perform(refresh)}>
           刷新
