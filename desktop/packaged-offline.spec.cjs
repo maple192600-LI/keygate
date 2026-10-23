@@ -59,6 +59,9 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await expect(page.getByRole('button',{name:'查询',exact:true})).toBeFocused();
  await page.keyboard.press('Tab');await expect(page.getByRole('button',{name:'刷新',exact:true})).toBeFocused();
  await page.screenshot({path:path.join(root,'customers-empty.png'),fullPage:true});
+ for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录'],['settings','设置']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();if(label!=='设置')await expect(page.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);await page.screenshot({path:path.join(root,'empty-'+key+'.png'),fullPage:true});}
+ for(const label of ['基本信息','签发身份','备份与数据','操作记录']){await page.getByRole('tab',{name:label,exact:true}).click();await expect(page.getByRole('tab',{name:label,exact:true})).toHaveAttribute('aria-selected','true');await page.screenshot({path:path.join(root,'settings-'+label+'.png'),fullPage:true});}
+ await page.getByRole('button',{name:'客户',exact:true}).click();
  await page.getByRole('button',{name:'新建客户',exact:true}).click();
  await page.getByLabel('客户名称',{exact:true}).fill('安装包合成客户');await page.getByLabel('联系方式',{exact:true}).fill('合成联系入口');
  await page.getByRole('button',{name:'保存客户',exact:true}).click();
@@ -77,7 +80,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await page.screenshot({path:path.join(root,'customer-detail.png'),fullPage:true});
  await page.getByRole('dialog',{name:'客户档案',exact:true}).getByRole('button',{name:/^(关闭|Close)$/}).click();
 
- await page.getByRole('button',{name:'设置',exact:true}).click();await page.locator('summary').filter({hasText:'签发身份'}).click();
+ await page.getByRole('button',{name:'设置',exact:true}).click();await page.getByRole('tab',{name:'签发身份',exact:true}).click();
  const signer=page.getByTestId('signing-identity');
  await page.screenshot({path:path.join(root,'settings-signing.png'),fullPage:true});
  await signer.getByLabel('签发密码',{exact:true}).fill('Synthetic-packaged-signing-password');
@@ -85,7 +88,7 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await signer.getByLabel('管理密码',{exact:true}).fill(ownerPassword);
  await signer.getByRole('button',{name:'确认创建签发身份',exact:true}).click();await expect(signer.getByRole('status')).toHaveText('已就绪');
  const publicIdentity=await page.evaluate(async()=> (await(await fetch('/api/v1/admin/offline-key/public')).json()).data.identity);
- await page.getByRole('button',{name:'客户',exact:true}).click();await page.getByRole('row').filter({has:page.getByRole('cell',{name:'安装包合成客户',exact:true})}).getByRole('button',{name:'发放授权',exact:true}).click();
+ await page.getByRole('button',{name:'概览',exact:true}).click();await page.getByRole('button',{name:'发放授权',exact:true}).click();await page.getByRole('dialog',{name:'选择客户',exact:true}).getByRole('button',{name:/安装包合成客户/}).click();
  const issue=page.getByRole('dialog');await issue.getByLabel('完整设备码',{exact:true}).fill('STQ-WIN1-'+'b'.repeat(64));await issue.getByLabel('设备名称',{exact:true}).fill('打包合成设备');
  await page.screenshot({path:path.join(root,'issue-form.png'),fullPage:true});
  await issue.getByLabel('天数',{exact:true}).fill('7');await issue.getByRole('button',{name:'核对并预览',exact:true}).click();
@@ -102,6 +105,14 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  fs.writeFileSync(path.join(root,'original.snaillic'),original);fs.writeFileSync(path.join(root,'public-identity.json'),JSON.stringify(publicIdentity));
  await page.screenshot({path:path.join(root,'issued.png'),fullPage:true});
  const focused=spawnSync(process.env.ComSpec||'cmd.exe',['/d','/s','/c',`""${path.join(path.dirname(executable),'run.bat')}""`],{env,windowsHide:true,windowsVerbatimArguments:true,encoding:'utf8',timeout:15000});assert.equal(focused.status,0,focused.stderr);
+ await issue.getByRole('button',{name:/^(关闭|Close)$/}).click();
+ for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录']]){await page.getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label,exact:true})).toBeVisible();await page.screenshot({path:path.join(root,'populated-'+key+'.png'),fullPage:true});}
+ await expect(page.getByRole('combobox',{name:'交付状态',exact:true})).toHaveValue('');
+ await expect(page.getByRole('cell',{name:'合成收件入口',exact:true})).toBeVisible();
+ const [deliveryDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'下载原件',exact:true}).click()]);
+ const deliveryFile=path.join(root,'delivery-original.snaillic');await deliveryDownload.saveAs(deliveryFile);assert.deepEqual(fs.readFileSync(deliveryFile),original);assert.equal((await rows()).length,1);
+ await page.getByRole('button',{name:'查看记录',exact:true}).click();await expect(page.getByRole('dialog',{name:'授权详情',exact:true}).getByRole('cell',{name:'合成收件入口',exact:true})).toBeVisible();await page.getByRole('dialog',{name:'授权详情',exact:true}).getByRole('button',{name:/^(关闭|Close)$/}).click();
+ await page.getByRole('button',{name:'客户',exact:true}).click();
  await close();await launch();await expect(page.getByRole('heading',{name:'客户',exact:true})).toBeVisible();await expect(page.getByRole('cell',{name:'安装包合成客户',exact:true})).toBeVisible();
  const again=Buffer.from(await page.evaluate(async id=>Array.from(new Uint8Array(await(await fetch('/api/v1/admin/license-issuances/'+id+'/file')).arrayBuffer())),issued.issuanceId));assert.deepEqual(again,original);
  await close();

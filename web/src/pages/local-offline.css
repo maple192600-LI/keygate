@@ -40,7 +40,7 @@
 .lc-topbar { display: flex; align-items: center; justify-content: space-between; min-height: 56px; padding: 0 28px; border-bottom: 1px solid var(--color-border); background: #fff; font-size: 12px; color: #667085; }
 .lc-breadcrumb-separator { padding: 0 12px; color: #c0c5d0; }
 .lc-content { padding: 28px; }
-.lc-list-page, .lc-settings { display: grid; min-width: 0; gap: 22px; }
+.lc-list-page, .lc-settings { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 22px; }
 .lc-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; }
 .lc-page-heading h1 { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.5; }
 .lc-list-panel { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; }
@@ -78,8 +78,9 @@
 .snail-local [role="dialog"] input[type="file"] { height: auto; min-height: 36px; padding: 6px 10px; }
 .snail-local [role="dialog"] form > div { min-width: 0; }
 .lc-dialog { max-height: calc(100vh - 56px); padding: 24px; }
-.lc-drawer { display: flex; flex-direction: column; gap: 26px; }
-.lc-drawer > h2 { padding-bottom: 18px; padding-right: 24px; border-bottom: 1px solid var(--color-border); }
+.lc-drawer { display: flex; flex-direction: column; gap: 0; overflow: hidden; padding: 0; }
+.lc-drawer > h2 { flex-shrink: 0; padding: 24px 42px 20px 28px; border-bottom: 1px solid var(--color-border); }
+.lc-drawer-body { display: grid; gap: 24px; min-height: 0; overflow-y: auto; padding: 24px 28px; }
 .lc-drawer form { flex-shrink: 0; }
 .snail-local [role="alert"] { line-height: 1.6; }
 @media (max-width: 1180px) {
@@ -102,3 +103,50 @@
 .lc-drawer .lc-page-heading h1 { font-size: 18px; }
 .lc-drawer .lc-empty { min-height: 110px; }
 .lc-signing-status { color: #356ae6; font-size: 13px; }
+
+.lc-overview { display: grid; gap: 22px; }
+.lc-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+.lc-stat-card { display: grid; gap: 18px; min-width: 0; padding: 22px; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; text-align: left; cursor: pointer; }
+.lc-stat-card:hover { border-color: #b5c8fa; }
+.lc-stat-card > span { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #667085; font-size: 13px; }
+.lc-stat-card svg { width: 17px; height: 17px; color: #8fa3cd; }
+.lc-stat-card strong { font-size: 30px; line-height: 1.2; font-weight: 600; }
+.lc-overview-columns { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 20px; align-items: start; }
+.lc-overview-lists, .lc-overview-aside { display: grid; min-width: 0; gap: 20px; }
+.lc-task-panel { min-width: 0; padding: 20px; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; }
+.lc-task-panel h2, .lc-compact-list h2 { font-size: 16px; font-weight: 600; }
+.lc-task-panel > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 16px 0; text-align: left; cursor: pointer; font-size: 13px; }
+.lc-task-panel > button:hover { color: var(--color-primary); }
+.lc-task-panel > button > svg { flex-shrink: 0; width: 17px; height: 17px; color: #7b96d5; }
+.lc-task-panel > button > svg:last-child { width: 14px; height: 14px; margin-left: auto; color: #8b94a7; }
+.lc-task-panel dl { display: grid; grid-template-columns: 1fr auto; gap: 18px; margin-top: 22px; font-size: 13px; }
+.lc-task-panel dt { color: #667085; }
+.lc-compact-list .lc-toolbar { justify-content: space-between; }
+.lc-compact-list .lc-empty { min-height: 120px; }
+.lc-compact-table { min-width: 580px; }
+.lc-license-table { min-width: 880px; }
+.lc-delivery-table { min-width: 820px; }
+.lc-record-number { display: block; margin-top: 4px; color: #667085; font-size: 11px; font-variant-numeric: tabular-nums; }
+.lc-license-customer { overflow-wrap: anywhere; }
+.lc-status { display: inline-flex; align-items: center; white-space: nowrap; padding: 2px 7px; border-radius: 4px; font-size: 12px; background: #f0f2f6; color: #667085; }
+.lc-status-valid, .lc-status-perpetual { background: #edf7f1; color: #287855; }
+.lc-status-expired { background: #fff0f1; color: #b72f40; }
+.lc-status-not_yet_valid { background: #fff5e9; color: #9c6519; }
+.lc-status-pending { background: #edf2ff; color: #356ae6; }
+.lc-settings-panel { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: #fff; }
+.lc-settings-tabs { display: flex; gap: 26px; padding: 0 22px; border-bottom: 1px solid var(--color-border); }
+.lc-settings-tabs button { position: relative; padding: 16px 0; color: #667085; font-size: 13px; cursor: pointer; }
+.lc-settings-tabs button[aria-selected="true"] { color: var(--color-primary); }
+.lc-settings-tabs button[aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: var(--color-primary); }
+.lc-settings-panel > [role="tabpanel"] > section, .lc-settings-panel .lc-settings-pair > section { border: 0; border-radius: 0; }
+.lc-settings-panel .lc-settings-pair { gap: 0; }
+.lc-settings-panel .lc-settings-pair > section + section { border-left: 1px solid var(--color-border); }
+.lc-app-version { color: #667085; font-size: 12px; }
+.lc-customer-picker-search { display: flex; gap: 8px; margin-bottom: 18px; }
+.lc-customer-options { display: grid; gap: 8px; }
+.lc-customer-options > button { display: grid; gap: 6px; padding: 14px 16px; border: 1px solid var(--color-border); border-radius: 6px; text-align: left; cursor: pointer; }
+.lc-customer-options > button:hover { border-color: #a9bffd; background: #f7f9ff; }
+.lc-customer-options > button:disabled { opacity: .5; cursor: default; }
+.lc-customer-options > button strong { font-size: 14px; font-weight: 500; }
+.lc-customer-options > button span { color: #667085; font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 1250px) { .lc-overview-columns { grid-template-columns: minmax(0, 1fr); } .lc-overview-aside { grid-template-columns: repeat(2, minmax(0, 1fr)); } .lc-stat-card { padding: 18px; } }

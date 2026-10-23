@@ -5,6 +5,7 @@ const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
 const {build, Platform} = require('electron-builder');
 const root = path.resolve(__dirname, '..');
+const managerVersion = require('./package.json').version;
 function requiredDirectory(name) {
   const value = process.env[name];
   if (!value || !path.isAbsolute(value) || !fs.statSync(value).isDirectory()) throw new Error(`请指定完整目录 ${name}`);
@@ -27,7 +28,7 @@ async function main() {
     if(!process.env[name] || !path.isAbsolute(process.env[name]) || !fs.statSync(process.env[name]).isFile()) throw new Error(`请指定完整构建工具路径 ${name}`);
   execFileSync(process.env.SNAIL_GO_EXECUTABLE,['build','-p','1','-trimpath','-o','bin/snail-license-center.exe','./cmd/server'],{cwd:root,stdio:'inherit',windowsHide:true,env:{...process.env,GOMAXPROCS:'2',GOOS:'windows',GOARCH:'amd64',CGO_ENABLED:'0'}});
   execFileSync(process.env.SNAIL_BUN_EXECUTABLE,['install','--frozen-lockfile'],{cwd:path.join(root,'web'),stdio:'inherit',windowsHide:true});
-  execFileSync(process.env.SNAIL_BUN_EXECUTABLE,['run','build'],{cwd:path.join(root,'web'),stdio:'inherit',windowsHide:true,env:{...process.env,VITE_SNAIL_DEPLOYMENT:'local_offline'}});
+  execFileSync(process.env.SNAIL_BUN_EXECUTABLE,['run','build'],{cwd:path.join(root,'web'),stdio:'inherit',windowsHide:true,env:{...process.env,VITE_SNAIL_DEPLOYMENT:'local_offline',VITE_SNAIL_MANAGER_VERSION:managerVersion}});
   for (const file of ['bin/snail-license-center.exe','web/dist/index.html','LICENSE','NOTICE','docs/蜗牛客户与授权中心_本地操作说明.md'])
     if (!fs.statSync(path.join(root,file)).isFile()) throw new Error(`缺少构建输入 ${file}`);
   for (const file of ['bin/postgres.exe','bin/pg_ctl.exe','bin/initdb.exe','bin/psql.exe','bin/createdb.exe','server_license.txt','commandlinetools_3rd_party_licenses.txt'])
@@ -67,7 +68,7 @@ async function main() {
   const sourceArchive=path.join(output,`蜗牛授权中心-对应源码-${candidate.slice(0,12)}.zip`);
   execFileSync('git',['archive','--format=zip',`--output=${sourceArchive}`,'HEAD'],{cwd:root,windowsHide:true});
   fs.copyFileSync(path.join(root,'docs/蜗牛授权中心_构建与源码交付.md'),path.join(output,'构建与源码交付说明.md'));
-  const artifact=path.join(output,'蜗牛客户与授权中心-0.1.0-x64.zip');
+  const artifact=path.join(output,`蜗牛客户与授权中心-${managerVersion}-x64.zip`);
   fs.writeFileSync(path.join(output,'管理包验收身份.json'),JSON.stringify({formatVersion:1,candidate,artifact:path.basename(artifact),sha256:createHash('sha256').update(fs.readFileSync(artifact)).digest('hex'),sourceArchive:path.basename(sourceArchive),sourceSHA256:createHash('sha256').update(fs.readFileSync(sourceArchive)).digest('hex'),deployment:'local_offline',docker:false,installedAcceptance:false},null,2)+'\n');
 }
 main().catch(error=>{process.stderr.write(`管理包构建失败：${error.message}\n`);process.exitCode=1;});

@@ -63,12 +63,26 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await expect(window.getByRole('status')).toHaveText('暂无客户');
   await expect(window.getByRole('button',{name:'上一页',exact:true})).toHaveCount(0);
   await window.screenshot({path:path.join(root,'ui-customers-empty.png'),fullPage:true});
-  await window.getByRole('button', { name: '新建客户', exact: true }).click();
+  for(const [key,label] of [['overview','概览'],['licenses','授权'],['delivery','交付记录'],['settings','设置']]){
+    await window.getByRole('button',{name:label,exact:true}).click();await expect(window.getByRole('heading',{name:label,exact:true})).toBeVisible();
+    if(label!=='设置')await expect(window.getByRole('button',{name:'发放授权',exact:true})).toBeInViewport();
+    assert.equal(await window.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    await window.screenshot({path:path.join(root,'ui-empty-'+key+'.png'),fullPage:true});
+  }
+  for(const label of ['基本信息','签发身份','备份与数据','操作记录']){await window.getByRole('tab',{name:label,exact:true}).click();await expect(window.getByRole('tab',{name:label,exact:true})).toHaveAttribute('aria-selected','true');await window.screenshot({path:path.join(root,'ui-settings-'+label+'.png'),fullPage:true});}
+  await window.getByRole('button',{name:'概览',exact:true}).click();await window.getByRole('button',{name:'发放授权',exact:true}).click();
+  await expect(window.getByRole('dialog',{name:'选择客户',exact:true})).toBeVisible();
+  await window.getByRole('dialog',{name:'选择客户',exact:true}).getByRole('button',{name:'新建客户',exact:true}).click();
+
   await window.getByLabel('客户名称', { exact: true }).fill('窗口合成客户');
   await window.getByLabel('联系方式', { exact: true }).fill('合成联系方式');
   await window.getByLabel('来源／介绍人', { exact: true }).fill('合成介绍人');
   await window.screenshot({path:path.join(root,'ui-customer-create.png'),fullPage:true});
   await window.getByRole('button', { name: '保存客户', exact: true }).click();
+  await expect(window.getByRole('dialog').getByRole('heading',{name:'发放授权 · 窗口合成客户',exact:true})).toBeVisible();
+  await window.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click();
+  await window.getByRole('button',{name:'客户',exact:true}).click();
+
   await expect(window.getByRole('cell', { name: '窗口合成客户', exact: true })).toBeVisible();
   await expect(window.getByRole('link', { name: 'Powered by Keygate' })).toBeVisible();
   await window.screenshot({path:path.join(root,'ui-customers-populated.png'),fullPage:true});
@@ -80,10 +94,17 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   assert.equal(await window.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,'最小窗口不能产生整页横向溢出');
   await expect(window.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport();
   await window.screenshot({path:path.join(root,'ui-customers-minimum.png'),fullPage:true});
+  await window.getByRole('button',{name:'查看档案',exact:true}).click();
+  const narrowDrawer=window.getByRole('dialog',{name:'客户档案',exact:true}),scrollBody=narrowDrawer.locator('.lc-drawer-body');
+  await scrollBody.hover();await window.mouse.wheel(0,1000);
+  await expect(narrowDrawer.getByRole('button',{name:/^(关闭|Close)$/})).toBeInViewport();
+  await window.screenshot({path:path.join(root,'ui-customer-drawer-minimum-bottom.png'),fullPage:true});
+  await narrowDrawer.getByRole('button',{name:/^(关闭|Close)$/}).click();
+
   await electron.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1440,940));
 
   await window.getByRole('button', {name:'设置',exact:true}).click();
-  await window.locator('summary').filter({hasText:'签发身份'}).click();
+  await window.getByRole('tab',{name:'签发身份',exact:true}).click();
   const signer=window.getByTestId('signing-identity');
   await expect(signer.getByRole('status')).toHaveText('未创建');
   await window.screenshot({path:path.join(root,'ui-settings-signing.png'),fullPage:true});
@@ -156,6 +177,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
     await page.getByRole('button',{name:button,exact:true}).click();
     await expect.poll(()=>{try{JSON.parse(fs.readFileSync(file,'utf8'));return true;}catch{return false;}}).toBe(true);
   }
+  await window.getByRole('tab',{name:'备份与数据',exact:true}).click();
   await saveDownload(window,bundleFile,'导出管理数据');
   const handoff=JSON.parse(fs.readFileSync(bundleFile,'utf8'));
   assert.equal(handoff.tables.commercial_customers.length,1);assert.equal(handoff.tables.license_issuances.length,2);
@@ -170,7 +192,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   window.once('dialog',dialog=>dialog.accept());
   await saveDownload(dataDialog,backupFile,'生成备份');
   await expect(dataDialog).toHaveCount(0);
-  await window.locator('summary').filter({hasText:'签发身份'}).click();
+  await window.getByRole('tab',{name:'签发身份',exact:true}).click();
   await saveDownload(signer,identityFile,'备份签发身份');
   await window.getByRole('button',{name:'授权',exact:true}).click();
   await window.getByRole('button',{name:'查看详情',exact:true}).click();
@@ -216,7 +238,12 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await details.getByRole('button',{name:/^(关闭|Close)$/}).click();
   await window.getByRole('button',{name:'概览',exact:true}).click();
   await expect(window.getByRole('button',{name:'有效授权 1',exact:true})).toBeVisible();
-  await expect(window.getByRole('button',{name:'待交付 1',exact:true})).toBeVisible();
+  await expect(window.getByRole('button',{name:'待交付文件 1',exact:true})).toBeVisible();
+  await window.screenshot({path:path.join(root,'ui-overview-populated.png'),fullPage:true});
+  await window.getByRole('button',{name:'待交付文件 1',exact:true}).click();
+  await expect(window.getByRole('combobox',{name:'交付状态',exact:true})).toHaveValue('pending');
+  await expect(window.getByRole('button',{name:'登记交付',exact:true})).toBeVisible();
+  await window.getByRole('button',{name:'概览',exact:true}).click();
   await window.getByRole('button',{name:'有效授权 1',exact:true}).click();
   await expect(window.getByRole('combobox',{name:'期限状态',exact:true})).toHaveValue('active');
   await expect(window.getByRole('cell',{name:'永久',exact:true})).toHaveCount(2);
@@ -253,6 +280,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await customerProfile.getByRole('button',{name:/^(关闭|Close)$/}).click();
   await reopened.getByRole('button',{name:'设置',exact:true}).click();
   await expect(reopened.getByLabel('商家名称',{exact:true})).toHaveValue('已保存的合成厂商');
+  await reopened.getByRole('tab',{name:'备份与数据',exact:true}).click();
   await reopened.getByRole('button',{name:'恢复备份',exact:true}).click();
   dataDialog=reopened.getByRole('dialog',{name:'恢复备份',exact:true});
   await dataDialog.getByLabel('加密备份文件',{exact:true}).setInputFiles(backupFile);
@@ -298,6 +326,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await target.getByLabel('密码',{exact:true}).fill('Synthetic-handoff-owner-password');
   await target.getByRole('button',{name:'登录',exact:true}).click();
   await target.getByRole('button',{name:'设置',exact:true}).click();
+  await target.getByRole('tab',{name:'备份与数据',exact:true}).click();
   await target.getByRole('button',{name:'导入管理数据',exact:true}).click();
   dataDialog=target.getByRole('dialog',{name:'导入管理数据',exact:true});
   await dataDialog.getByLabel('管理数据包',{exact:true}).setInputFiles(bundleFile);
@@ -308,7 +337,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await dataDialog.getByLabel('当前管理密码',{exact:true}).fill('Synthetic-handoff-owner-password');
   await dataDialog.getByRole('button',{name:'确认导入管理数据',exact:true}).click();
   await expect(dataDialog).toHaveCount(0);
-  await target.locator('summary').filter({hasText:'签发身份'}).click();
+  await target.getByRole('tab',{name:'签发身份',exact:true}).click();
   const targetSigner=target.getByTestId('signing-identity');
   await expect(targetSigner.getByRole('button',{name:'创建签发身份',exact:true})).toBeDisabled();
   await targetSigner.getByLabel('加密签发身份文件',{exact:true}).setInputFiles(identityFile);
@@ -337,7 +366,7 @@ test('原生独立窗口客户签发交付、加密备份恢复、空实例移�
   await target.screenshot({path:path.join(root,'handoff-renewal.png'),fullPage:true});
   await lifecycle.getByRole('button',{name:/^(关闭|Close)$/}).click();
   await target.getByRole('button',{name:'设置',exact:true}).click();
-  await target.locator('summary').filter({hasText:'最近操作'}).click();
+  await target.getByRole('tab',{name:'操作记录',exact:true}).click();
   await expect(target.getByRole('cell',{name:'synthetic_owner',exact:true})).not.toHaveCount(0);
   await expect(target.getByRole('cell',{name:'handoff_owner',exact:true})).not.toHaveCount(0);
   await target.screenshot({path:path.join(root,'handoff-provenance.png'),fullPage:true});

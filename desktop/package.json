@@ -1,6 +1,6 @@
 {
   "name": "snail-license-center",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "蜗牛客户与授权中心 Windows 本地离线管理端",
   "author": "snail-finance",
@@ -15,5 +15,9 @@
     "electron": "43.7.0",
     "electron-builder": "26.15.3"
   },
-  "overrides": { "app-builder-lib": { "@electron/get": "5.0.0" } }
+  "overrides": {
+    "app-builder-lib": {
+      "@electron/get": "5.0.0"
+    }
+  }
 }
