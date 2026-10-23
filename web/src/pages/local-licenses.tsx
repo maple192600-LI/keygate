@@ -89,6 +89,7 @@ export default function LocalLicenses({
   epoch = 0,
   onCreate,
   onManage,
+  onChanged,
 }: {
   delivery?: boolean
   customerId?: string
@@ -100,6 +101,7 @@ export default function LocalLicenses({
   epoch?: number
   onCreate?: () => void
   onManage?: LicenseAction
+  onChanged?: () => void
 }) {
   const [items, setItems] = useState<OfflineLicense[]>([]),
     [total, setTotal] = useState(0),
@@ -344,6 +346,10 @@ export default function LocalLicenses({
       {selected && (
         <LicenseDetails
           id={selected}
+          onChanged={() => {
+            setReload((value) => value + 1)
+            onChanged?.()
+          }}
           onClose={() => {
             setSelected(null)
             setReload((value) => value + 1)
@@ -361,7 +367,17 @@ export default function LocalLicenses({
     </section>
   )
 }
-function LicenseDetails({ id, onClose, onManage }: { id: string; onClose: () => void; onManage?: LicenseAction }) {
+function LicenseDetails({
+  id,
+  onClose,
+  onManage,
+  onChanged,
+}: {
+  id: string
+  onClose: () => void
+  onManage?: LicenseAction
+  onChanged?: () => void
+}) {
   const [data, setData] = useState<{
       license: OfflineLicense
       issuances: Issuance[]
@@ -461,10 +477,19 @@ function LicenseDetails({ id, onClose, onManage }: { id: string; onClose: () => 
                 id={row.id}
                 enabled={row.issuanceEnabled}
                 revision={row.revision}
-                onChanged={() => setReload((value) => value + 1)}
+                onChanged={() => {
+                  setReload((value) => value + 1)
+                  onChanged?.()
+                }}
               />
               {row.deliveryState === "pending" && (
-                <DeliveryForm issuance={issued(row)} onRecorded={() => setReload((value) => value + 1)} />
+                <DeliveryForm
+                  issuance={issued(row)}
+                  onRecorded={() => {
+                    setReload((value) => value + 1)
+                    onChanged?.()
+                  }}
+                />
               )}
               <section className="grid gap-3">
                 <h3 className="font-semibold">历次签发</h3>

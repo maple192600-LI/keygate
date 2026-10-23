@@ -27,12 +27,16 @@ export default function LocalOverview({
 }) {
   const [state, setState] = useState<Overview | null>(null)
   const [error, setError] = useState("")
-  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch refreshes summary after the issuance dialog closes.
+  const [refresh, setRefresh] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch and refresh reload the summary after issuance, lifecycle, or delivery changes.
   useEffect(() => {
     let alive = true
     localRequest<Overview>("/admin/overview")
       .then((value) => {
-        if (alive) setState(value)
+        if (alive) {
+          setState(value)
+          setError("")
+        }
       })
       .catch((cause) => {
         if (alive) setError(cause.message)
@@ -40,7 +44,7 @@ export default function LocalOverview({
     return () => {
       alive = false
     }
-  }, [epoch])
+  }, [epoch, refresh])
   const cards = [
     { label: "已登记客户", count: state?.customers, icon: Users, open: () => onNavigate("customers") },
     { label: "有效授权", count: state?.valid, icon: KeyRound, open: () => onNavigate("licenses", false, "active") },
@@ -74,8 +78,21 @@ export default function LocalOverview({
       </div>
       <div className="lc-overview-columns">
         <div className="lc-overview-lists">
-          <LocalLicenses epoch={epoch} compact title="最近发放" onManage={onManage} />
-          <LocalLicenses epoch={epoch} compact initialExpiring title="30天内到期" onManage={onManage} />
+          <LocalLicenses
+            epoch={epoch + refresh}
+            compact
+            title="最近发放"
+            onManage={onManage}
+            onChanged={() => setRefresh((value) => value + 1)}
+          />
+          <LocalLicenses
+            epoch={epoch + refresh}
+            compact
+            initialExpiring
+            title="30天内到期"
+            onManage={onManage}
+            onChanged={() => setRefresh((value) => value + 1)}
+          />
         </div>
         <aside className="lc-overview-aside">
           <section className="lc-task-panel">

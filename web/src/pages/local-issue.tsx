@@ -236,6 +236,30 @@ export default function LocalIssue({
               <dl className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
                 <dt>客户</dt>
                 <dd>{prepared.preview.customerName}</dd>
+                {(customer.contactName || customer.contactMethod) && (
+                  <>
+                    <dt>联系资料</dt>
+                    <dd>{[customer.contactName, customer.contactMethod].filter(Boolean).join(" · ")}</dd>
+                  </>
+                )}
+                {customer.email && (
+                  <>
+                    <dt>邮箱</dt>
+                    <dd>{customer.email}</dd>
+                  </>
+                )}
+                {customer.sourceText && (
+                  <>
+                    <dt>来源／介绍人</dt>
+                    <dd>{customer.sourceText}</dd>
+                  </>
+                )}
+                {customer.notes && (
+                  <>
+                    <dt>客户备注</dt>
+                    <dd>{customer.notes}</dd>
+                  </>
+                )}
                 <dt>设备</dt>
                 <dd>{prepared.preview.deviceLabel || "申请设备"}</dd>
                 <dt>设备码</dt>

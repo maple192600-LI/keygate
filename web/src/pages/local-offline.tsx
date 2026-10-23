@@ -542,12 +542,15 @@ function IssueCustomerPicker({
 }) {
   const [query, setQuery] = useState(""),
     [submitted, setSubmitted] = useState(""),
+    [reload, setReload] = useState(0),
     [items, setItems] = useState<CommercialCustomer[]>([]),
     [busy, setBusy] = useState(true),
     [error, setError] = useState("")
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload permits retrying an unchanged customer query after a failure.
   useEffect(() => {
     let alive = true
     setBusy(true)
+    setError("")
     localRequest<{ items: CommercialCustomer[] }>(
       `/admin/commercial-customers?q=${encodeURIComponent(submitted)}&pageSize=100`,
     )
@@ -566,7 +569,7 @@ function IssueCustomerPicker({
     return () => {
       alive = false
     }
-  }, [submitted])
+  }, [submitted, reload])
   return (
     <Dialog
       open
@@ -584,6 +587,7 @@ function IssueCustomerPicker({
             onSubmit={(event) => {
               event.preventDefault()
               setSubmitted(query)
+              setReload((value) => value + 1)
             }}
           >
             <Input
@@ -609,13 +613,30 @@ function IssueCustomerPicker({
               <button
                 type="button"
                 key={customer.id}
-                disabled={!customer.issuanceEnabled || busy}
+                disabled={!customer.issuanceEnabled || busy || !!error}
                 onClick={() => onSelect(customer)}
               >
                 <strong>{customer.displayName}</strong>
                 <span>
-                  {[customer.contactName, customer.contactMethod, customer.sourceText].filter(Boolean).join(" · ") ||
-                    "—"}
+                  {[
+                    customer.customerType === "company" ? "企业" : "个人",
+                    customer.contactName,
+                    customer.contactMethod,
+                    customer.email,
+                    customer.sourceText,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+                {customer.notes && <span>{customer.notes}</span>}
+                <span>
+                  登记时间：
+                  {new Intl.DateTimeFormat("zh-CN", {
+                    timeZone: "Asia/Shanghai",
+                    dateStyle: "medium",
+                    timeStyle: "medium",
+                    hour12: false,
+                  }).format(new Date(customer.createdAt))}
                 </span>
               </button>
             ))}
