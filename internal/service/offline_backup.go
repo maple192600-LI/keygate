@@ -244,15 +244,25 @@ func mustJSON(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 // Called at confirmation while the local write gate is held. Preview age alone
 // cannot protect originals issued after the preview or after an old backup.
-func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c *RestoreCandidate) error {
+func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c *RestoreCandidate, signingPassphrase string) error {
 	if c == nil || c.Store == nil {
 		return backupFailure("恢复候选不可用")
 	}
 	physical, err := s.Keys.Status()
+	damagedIdentity := err != nil
+	var expected offline.PublicIdentity
 	if err != nil {
-		return err
+		// A damaged active container must not block a verified full recovery.
+		// Only a registered public identity and a healthy replacement container
+		// can authorize this path; normal signing still requires the active key.
+		physicalErr := err
+		expected, err = s.Store.ExpectedSigningIdentity(ctx, offline.PublicIdentity{})
+		if err != nil || expected.KeyID == "" || expected.PublicKeyPEM == "" || !c.IncludesIdentity {
+			return physicalErr
+		}
+	} else {
+		expected, err = s.Store.ExpectedSigningIdentity(ctx, physical)
 	}
-	expected, err := s.Store.ExpectedSigningIdentity(ctx, physical)
 	if err != nil {
 		return err
 	}
@@ -262,6 +272,25 @@ func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c 
 	}
 	if expected.KeyID != "" && expected.KeyID != restored.KeyID {
 		return backupFailure("备份缺少当前已登记的签发身份")
+	}
+	// A missing container reports "uncreated" rather than an error. Replacing
+	// that registered identity still requires proving the candidate can unlock.
+	if physical.KeyID == "" && expected.KeyID != "" && c.IncludesIdentity {
+		damagedIdentity = true
+	}
+	if damagedIdentity {
+		if signingPassphrase == "" {
+			return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件缺失或损坏，请填写原签发密码验证备份中的身份后恢复"}
+		}
+		keys := offline.NewKeyStore(c.IdentityRoot)
+		defer keys.Lock()
+		identity, unlockErr := keys.Unlock(signingPassphrase, time.Now().Add(time.Minute))
+		if unlockErr != nil {
+			return unlockErr
+		}
+		if identity.KeyID != expected.KeyID {
+			return backupFailure("备份中的签发身份与当前登记不一致")
+		}
 	}
 	type fact struct {
 		LicenseID string

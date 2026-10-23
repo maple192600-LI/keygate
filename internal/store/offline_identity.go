@@ -16,28 +16,33 @@ func (s *Store) ExpectedSigningIdentity(ctx context.Context, physical offline.Pu
 		return offline.PublicIdentity{}, &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发公钥、身份文件或签发历史不一致，请保留资料并导入原身份"}
 	}
 	raw, err := s.GetSetting(ctx, "snail_public_identity")
+	emptyRegistration := false
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return expected, err
 	}
 	if err == nil {
-		var saved offline.PublicIdentity
-		if json.Unmarshal([]byte(raw), &saved) != nil || saved.KeyID == "" {
+		var saved *offline.PublicIdentity
+		if json.Unmarshal([]byte(raw), &saved) != nil || saved == nil {
 			return invalid()
 		}
-		public, e := offline.ParsePublic([]byte(saved.PublicKeyPEM))
-		if e != nil || offline.KeyID(public) != saved.KeyID {
-			return invalid()
+		if saved.KeyID == "" && saved.PublicKeyPEM == "" {
+			emptyRegistration = true
+		} else {
+			public, e := offline.ParsePublic([]byte(saved.PublicKeyPEM))
+			if e != nil || saved.KeyID == "" || offline.KeyID(public) != saved.KeyID {
+				return invalid()
+			}
+			if expected.KeyID != "" && expected.KeyID != saved.KeyID {
+				return invalid()
+			}
+			expected = *saved
 		}
-		if expected.KeyID != "" && expected.KeyID != saved.KeyID {
-			return invalid()
-		}
-		expected = saved
 	}
 	var ids []string
 	if err = s.DB.NewRaw("SELECT DISTINCT key_id FROM license_issuances").Scan(ctx, &ids); err != nil {
 		return expected, err
 	}
-	if len(ids) > 1 || (len(ids) == 1 && expected.KeyID != "" && expected.KeyID != ids[0]) {
+	if len(ids) > 1 || (emptyRegistration && len(ids) > 0) || (len(ids) == 1 && expected.KeyID != "" && expected.KeyID != ids[0]) {
 		return invalid()
 	}
 	if len(ids) == 1 && expected.KeyID == "" {

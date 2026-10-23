@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { localDownload, localFileRequest, localRequest } from "@/lib/local-offline-api"
+import { LocalAPIError, localDownload, localFileRequest, localRequest } from "@/lib/local-offline-api"
 
 type Summary = {
   customers: number
@@ -138,6 +138,8 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
     [confirm, setConfirm] = useState(""),
     [ownerPassword, setOwner] = useState(""),
     [include, setInclude] = useState(false)
+  const [signingPassphrase, setSigningPassphrase] = useState(""),
+    [needsSigningPassphrase, setNeedsSigningPassphrase] = useState(false)
   const [preview, setPreview] = useState<Preview | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -149,6 +151,7 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
     try {
       await action()
     } catch (e) {
+      if (e instanceof LocalAPIError && e.code === "RESTORE_SIGNING_PASSWORD_REQUIRED") setNeedsSigningPassphrase(true)
       setError(message(e))
     } finally {
       setBusy(false)
@@ -169,6 +172,8 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
     setPassword("")
     setConfirm("")
     setOwner("")
+    setSigningPassphrase("")
+    setNeedsSigningPassphrase(false)
     setInclude(false)
     setPreview(null)
     setError("")
@@ -203,6 +208,7 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
       await localRequest(mode === "bundle" ? "/admin/business-bundle/import" : "/admin/backups/restore", {
         previewId: preview.previewId,
         ownerPassword,
+        ...(mode === "restore" ? { signingPassphrase } : {}),
       })
       if (mode === "restore") {
         window.location.reload()
@@ -390,6 +396,20 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
                       onChange={(e) => setOwner(e.target.value)}
                     />
                   </div>
+                  {mode === "restore" && needsSigningPassphrase && (
+                    <div className="grid gap-2">
+                      <Label htmlFor="restore-signing-passphrase">原签发密码</Label>
+                      <Input
+                        id="restore-signing-passphrase"
+                        type="password"
+                        value={signingPassphrase}
+                        autoComplete="off"
+                        disabled={busy}
+                        required
+                        onChange={(e) => setSigningPassphrase(e.target.value)}
+                      />
+                    </div>
+                  )}
                 </>
               )}
               {error && (

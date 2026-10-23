@@ -107,7 +107,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = backup.ValidateRestoreContinuity(ctx, candidate); err != nil {
+	if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err != nil {
 		t.Fatal(err)
 	}
 	for revision := int64(1); revision <= 2; revision++ {
@@ -115,7 +115,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 		if _, err = svc.Issue(ctx, actor, prepareOfflineCommand(t, svc, intent)); err != nil {
 			t.Fatal(err)
 		}
-		if err = backup.ValidateRestoreContinuity(ctx, candidate); err == nil {
+		if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err == nil {
 			t.Fatal("old preview erased newer issuance")
 		}
 	}
@@ -135,7 +135,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = backup.ValidateRestoreContinuity(ctx, current); err != nil {
+	if err = backup.ValidateRestoreContinuity(ctx, current, ""); err != nil {
 		t.Fatal(err)
 	}
 	keys := offline.NewKeyStore(current.IdentityRoot)
@@ -188,6 +188,197 @@ func TestOfflineRegisteredPublicIdentityConstrainsZeroIssuance(t *testing.T) {
 	}
 	if _, err = target.ExpectedSigningIdentity(ctx, physical); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestOfflineUnregisteredEmptyBackupAndBundleRemainUsable(t *testing.T) {
+	ctx := context.Background()
+	s, keys, _ := blankBackupTarget(t)
+	u, _ := url.Parse(os.Getenv("SNAIL_LOCAL_TEST_DSN"))
+	var name string
+	if err := s.DB.NewRaw("SELECT current_database()").Scan(ctx, &name); err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	backup := &OfflineBackupService{Store: s, Keys: keys, DatabaseURL: u.String(), DataDir: t.TempDir(), MigrationDir: "../../db/migrations", EncryptionSecret: strings.Repeat("09", 32)}
+	raw, err := backup.Backup(ctx, "Synthetic-empty-identity-backup", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := backup.PreviewRestore(ctx, raw, "Synthetic-empty-identity-backup")
+	if err != nil {
+		t.Fatal("unregistered backup rejected", err)
+	}
+	defer func() {
+		if err := backup.DiscardRestore(ctx, candidate); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err != nil {
+		t.Fatal(err)
+	}
+	bundleRaw, err := backup.ExportBusiness(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := store.ParseBusinessBundle(bundleRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, targetKeys, actor := blankBackupTarget(t)
+	if _, err = target.ImportBusinessBundle(ctx, bundle, actor, true); err != nil {
+		t.Fatal(err)
+	}
+	if expected, e := target.ExpectedSigningIdentity(ctx, offline.PublicIdentity{}); e != nil || expected.KeyID != "" {
+		t.Fatal("empty registration became corrupt", e)
+	}
+	created, err := targetKeys.Create("Synthetic-first-key-after-import", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected, e := target.ExpectedSigningIdentity(ctx, created); e != nil || expected.KeyID != created.KeyID {
+		t.Fatal("first identity blocked", e)
+	}
+	if err = target.SetSetting(ctx, "snail_public_identity", "null"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = target.ExpectedSigningIdentity(ctx, created); err == nil {
+		t.Fatal("null identity record accepted as an empty registration")
+	}
+}
+func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "corrupt"
+		if missing {
+			name = "missing"
+		}
+		t.Run(name, func(t *testing.T) { testOfflineRestoreUnavailableActiveIdentity(t, missing) })
+	}
+}
+func testOfflineRestoreUnavailableActiveIdentity(t *testing.T, missing bool) {
+	ctx := context.Background()
+	backup, svc, actor, first, base := sourceBackupService(t)
+	public, err := backup.Keys.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = backup.Store.SetSetting(ctx, "snail_public_identity", mustJSON(public)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := backup.Backup(ctx, "Synthetic-corrupt-active-key", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := backup.Backup(ctx, "Synthetic-corrupt-active-key", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := backup.Keys.EncryptedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRoot := t.TempDir()
+	active := offline.NewKeyStore(activeRoot)
+	defer active.Lock()
+	if err = active.Import(identity, public.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	backup.Keys = active
+	activeFile := filepath.Join(activeRoot, "keys", "signing-identity.json")
+	if missing {
+		if err = os.Remove(activeFile); err != nil {
+			t.Fatal(err)
+		}
+		if status, e := active.Status(); e != nil || status.State != "uncreated" {
+			t.Fatal("fault did not remove active container", e)
+		}
+	} else {
+		if err = os.WriteFile(activeFile, []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = active.Status(); err == nil {
+			t.Fatal("fault did not corrupt active container")
+		}
+	}
+	for _, test := range []struct {
+		raw   []byte
+		allow bool
+	}{{without, false}, {raw, true}} {
+		candidate, e := backup.PreviewRestore(ctx, test.raw, "Synthetic-corrupt-active-key")
+		if e != nil {
+			t.Fatal(e)
+		}
+		if test.allow {
+			required, ok := backup.ValidateRestoreContinuity(ctx, candidate, "").(*offline.Error)
+			if !ok || required.Code != "RESTORE_SIGNING_PASSWORD_REQUIRED" {
+				t.Fatal("damaged identity recovery did not require signing password")
+			}
+			if backup.ValidateRestoreContinuity(ctx, candidate, "Wrong-signing-password") == nil {
+				t.Fatal("wrong signing password accepted")
+			}
+		}
+		e = backup.ValidateRestoreContinuity(ctx, candidate, "Synthetic-service-signing-password")
+		if test.allow {
+			if e != nil {
+				t.Fatal("healthy same-identity backup blocked", e)
+			}
+			restoredKeys := offline.NewKeyStore(candidate.IdentityRoot)
+			if _, e = restoredKeys.Unlock("Synthetic-service-signing-password", time.Now().Add(time.Hour)); e != nil {
+				t.Fatal(e)
+			}
+			restored := &OfflineIssuanceService{Store: candidate.Store, Keys: restoredKeys, PreviewSecret: bytes.Repeat([]byte{5}, 32), clock: func() time.Time { return base }}
+			next, e := restored.Issue(ctx, actor, prepareOfflineCommand(t, restored, OfflineIntent{Action: "renew", LicenseID: first.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}))
+			restoredKeys.Lock()
+			if e != nil || next.Revision != 2 {
+				t.Fatal("recovery did not preserve signing sequence", e)
+			}
+		} else if (e == nil) != missing {
+			t.Fatal("identity-free restore changed the unavailable-key policy", e)
+		}
+		if e = backup.DiscardRestore(ctx, candidate); e != nil {
+			t.Fatal(e)
+		}
+	}
+	plain, err := offline.OpenBackup(raw, "Synthetic-corrupt-active-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload FullBackupPayload
+	if err = json.Unmarshal(plain, &payload); err != nil {
+		t.Fatal(err)
+	}
+	clear(plain)
+	container, err := offline.ParseContainer(payload.IdentityFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstByte := "A"
+	if container.CiphertextB64[0] == 'A' {
+		firstByte = "B"
+	}
+	container.CiphertextB64 = firstByte + container.CiphertextB64[1:]
+	payload.IdentityFile, _ = json.Marshal(container)
+	payload.IdentitySHA256 = digest(payload.IdentityFile)
+	plain, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt, err := offline.SealBackup(plain, "Synthetic-corrupt-active-key")
+	clear(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := backup.PreviewRestore(ctx, corrupt, "Synthetic-corrupt-active-key")
+	if err != nil {
+		t.Fatal("structural corruption was not isolated to ciphertext", err)
+	}
+	if backup.ValidateRestoreContinuity(ctx, candidate, "Synthetic-service-signing-password") == nil {
+		t.Fatal("unusable replacement ciphertext accepted")
+	}
+	if err = backup.DiscardRestore(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if countOfflineRows(t, svc.Store, "license_issuances") != 1 {
+		t.Fatal("source issuance history changed")
 	}
 }
 func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
