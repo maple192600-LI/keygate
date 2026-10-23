@@ -69,14 +69,8 @@ test('实际管理包原生启动签发、中文启动停止BAT及重开保留',
  await page.getByLabel('客户名称',{exact:true}).fill(longName);await page.getByRole('button',{name:'保存客户',exact:true}).click();
  await expect(page.getByRole('cell',{name:longName,exact:true})).toBeVisible();
  await page.screenshot({path:path.join(root,'customers-populated.png'),fullPage:true});
- const cdp=await browser.contexts()[0].newCDPSession(page);
- const {windowId}=await cdp.send('Browser.getWindowForTarget');
- await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:1120,height:720}});
- await expect.poll(()=>page.evaluate(()=>window.innerWidth)).toBeLessThanOrEqual(1120);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
  await expect(page.getByRole('button',{name:'新建客户',exact:true})).toBeInViewport();
- await page.screenshot({path:path.join(root,'customers-minimum.png'),fullPage:true});
- await cdp.send('Browser.setWindowBounds',{windowId,bounds:{width:1440,height:940}});await cdp.detach();
  await page.getByLabel('查询客户',{exact:true}).fill('安装包合成客户');await page.getByRole('button',{name:'查询',exact:true}).click();
  await expect(page.getByRole('cell',{name:longName,exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'查看档案',exact:true}).click();await expect(page.getByLabel('邮箱',{exact:true})).toHaveValue('');

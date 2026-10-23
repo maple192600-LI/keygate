@@ -148,3 +148,5 @@ Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证
 最终源码界面复核：第二轮同一原生用例1/1通过，23.11秒，隔离根 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-3EFsU9`；此前第一轮证据保留。Go `TestPasswordHash` 与 `TestEncryptedSigningIdentityLifecycle` 各通过。生产前端类型及构建通过（存在既有 bundle 大于500KB提示）。新管理包将另行记录包哈希及沙盒验证，不覆盖原交付目录。
 
 定向前端 lint 未全绿：从根目录调用 Biome 遇到嵌套配置；改在 web 运行后报告6项错误，其中新增原生客户名称按钮缺少显式type已改为button。其余5项为既有刷新/epoch触发依赖被规则认为多余；这些依赖承担重新查询，未采用删除依赖的自动建议。类型构建与真实运行结果另列，不把本检查写成通过。
+
+89fea51实际管理包首次沙盒执行失败于新增验收脚本调用Browser.getWindowForTarget：Electron不提供该CDP方法。此前首次短密码拒绝、两个无邮箱客户、空/非空页面均已通过；停止入口正常关闭。未将此失败称为产品功能通过。包层移除不支持的重复缩放动作，保留默认窗口可达和横向溢出检查；最小窗口的真实原生证据仍归源码层，不冒充包层执行。生产运行文件无改动，复测同一89fea51包并另记验收脚本候选。
