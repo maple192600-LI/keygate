@@ -190,6 +190,124 @@ func TestOfflineRegisteredPublicIdentityConstrainsZeroIssuance(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestOfflineUnregisteredEmptyBackupAndBundleRemainUsable(t *testing.T) {
+	ctx := context.Background()
+	s, keys, _ := blankBackupTarget(t)
+	u, _ := url.Parse(os.Getenv("SNAIL_LOCAL_TEST_DSN"))
+	var name string
+	if err := s.DB.NewRaw("SELECT current_database()").Scan(ctx, &name); err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	backup := &OfflineBackupService{Store: s, Keys: keys, DatabaseURL: u.String(), DataDir: t.TempDir(), MigrationDir: "../../db/migrations", EncryptionSecret: strings.Repeat("09", 32)}
+	raw, err := backup.Backup(ctx, "Synthetic-empty-identity-backup", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := backup.PreviewRestore(ctx, raw, "Synthetic-empty-identity-backup")
+	if err != nil {
+		t.Fatal("unregistered backup rejected", err)
+	}
+	defer func() {
+		if err := backup.DiscardRestore(ctx, candidate); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err = backup.ValidateRestoreContinuity(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	bundleRaw, err := backup.ExportBusiness(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := store.ParseBusinessBundle(bundleRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, targetKeys, actor := blankBackupTarget(t)
+	if _, err = target.ImportBusinessBundle(ctx, bundle, actor, true); err != nil {
+		t.Fatal(err)
+	}
+	if expected, e := target.ExpectedSigningIdentity(ctx, offline.PublicIdentity{}); e != nil || expected.KeyID != "" {
+		t.Fatal("empty registration became corrupt", e)
+	}
+	created, err := targetKeys.Create("Synthetic-first-key-after-import", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected, e := target.ExpectedSigningIdentity(ctx, created); e != nil || expected.KeyID != created.KeyID {
+		t.Fatal("first identity blocked", e)
+	}
+}
+func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *testing.T) {
+	ctx := context.Background()
+	backup, svc, actor, first, base := sourceBackupService(t)
+	public, err := backup.Keys.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = backup.Store.SetSetting(ctx, "snail_public_identity", mustJSON(public)); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := backup.Backup(ctx, "Synthetic-corrupt-active-key", true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := backup.Backup(ctx, "Synthetic-corrupt-active-key", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := backup.Keys.EncryptedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeRoot := t.TempDir()
+	active := offline.NewKeyStore(activeRoot)
+	defer active.Lock()
+	if err = active.Import(identity, public.KeyID); err != nil {
+		t.Fatal(err)
+	}
+	backup.Keys = active
+	if err = os.WriteFile(filepath.Join(activeRoot, "keys", "signing-identity.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = active.Status(); err == nil {
+		t.Fatal("fault did not corrupt active container")
+	}
+	for _, test := range []struct {
+		raw   []byte
+		allow bool
+	}{{without, false}, {raw, true}} {
+		candidate, e := backup.PreviewRestore(ctx, test.raw, "Synthetic-corrupt-active-key")
+		if e != nil {
+			t.Fatal(e)
+		}
+		e = backup.ValidateRestoreContinuity(ctx, candidate)
+		if test.allow {
+			if e != nil {
+				t.Fatal("healthy same-identity backup blocked", e)
+			}
+			restoredKeys := offline.NewKeyStore(candidate.IdentityRoot)
+			if _, e = restoredKeys.Unlock("Synthetic-service-signing-password", time.Now().Add(time.Hour)); e != nil {
+				t.Fatal(e)
+			}
+			restored := &OfflineIssuanceService{Store: candidate.Store, Keys: restoredKeys, PreviewSecret: bytes.Repeat([]byte{5}, 32), clock: func() time.Time { return base }}
+			next, e := restored.Issue(ctx, actor, prepareOfflineCommand(t, restored, OfflineIntent{Action: "renew", LicenseID: first.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}))
+			restoredKeys.Lock()
+			if e != nil || next.Revision != 2 {
+				t.Fatal("recovery did not preserve signing sequence", e)
+			}
+		} else if e == nil {
+			t.Fatal("corrupt active key accepted backup without replacement")
+		}
+		if e = backup.DiscardRestore(ctx, candidate); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if countOfflineRows(t, svc.Store, "license_issuances") != 1 {
+		t.Fatal("source issuance history changed")
+	}
+}
 func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
 	ctx := context.Background()
 	backup, source, actor, first, base := sourceBackupService(t)

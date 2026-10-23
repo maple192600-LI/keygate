@@ -249,10 +249,19 @@ func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c 
 		return backupFailure("恢复候选不可用")
 	}
 	physical, err := s.Keys.Status()
+	var expected offline.PublicIdentity
 	if err != nil {
-		return err
+		// A damaged active container must not block a verified full recovery.
+		// Only a registered public identity and a healthy replacement container
+		// can authorize this path; normal signing still requires the active key.
+		physicalErr := err
+		expected, err = s.Store.ExpectedSigningIdentity(ctx, offline.PublicIdentity{})
+		if err != nil || expected.KeyID == "" || expected.PublicKeyPEM == "" || !c.IncludesIdentity {
+			return physicalErr
+		}
+	} else {
+		expected, err = s.Store.ExpectedSigningIdentity(ctx, physical)
 	}
-	expected, err := s.Store.ExpectedSigningIdentity(ctx, physical)
 	if err != nil {
 		return err
 	}
