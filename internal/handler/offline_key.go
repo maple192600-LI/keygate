@@ -142,10 +142,11 @@ func (h *OfflineKeyHandler) Lock(c *gin.Context) {
 }
 func (h *OfflineKeyHandler) Recovery(c *gin.Context) {
 	var input struct {
-		RequestFile   string `json:"requestFile"`
-		OwnerPassword string `json:"ownerPassword"`
+		RequestFile string `json:"requestFile"`
 	}
-	if !LocalJSON(c, &input) || !h.ownerPassword(c, input.OwnerPassword) {
+	// The route already requires the current owner session and signing still
+	// requires the unlocked original key. Do not ask for a second login here.
+	if !LocalJSON(c, &input) {
 		return
 	}
 	r, err := offline.ParseRecoveryRequest([]byte(input.RequestFile))
