@@ -146,3 +146,5 @@ Jev实际jev-1.14.0检查本次失败分流：aligned .99、confidence .98；证
 源码原生验证第一轮：`node --test desktop/local-offline.spec.cjs`，1/1通过，22.83秒。任务隔离根 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-RCQ0cJ`；覆盖首次短密码拒绝且保留商家资料、无邮箱建客户、档案、1120×720窗口、签发下载原字节校验、手动交付、续期换机、备份恢复、同身份移交续期及正常关闭重开。已查看空列表、非空列表、最小窗口、档案、发放表单和签发设置的真实原生截图。后续小幅调整焦点轮廓、文字对比和重复标题后，需再次验证并核对新的实际管理包；本段不证明新包已交付或用户当前窗口已升级。
 
 最终源码界面复核：第二轮同一原生用例1/1通过，23.11秒，隔离根 `C:\Users\Administrator\AppData\Local\Temp\snail-keygate-t03-3EFsU9`；此前第一轮证据保留。Go `TestPasswordHash` 与 `TestEncryptedSigningIdentityLifecycle` 各通过。生产前端类型及构建通过（存在既有 bundle 大于500KB提示）。新管理包将另行记录包哈希及沙盒验证，不覆盖原交付目录。
+
+定向前端 lint 未全绿：从根目录调用 Biome 遇到嵌套配置；改在 web 运行后报告6项错误，其中新增原生客户名称按钮缺少显式type已改为button。其余5项为既有刷新/epoch触发依赖被规则认为多余；这些依赖承担重新查询，未采用删除依赖的自动建议。类型构建与真实运行结果另列，不把本检查写成通过。
