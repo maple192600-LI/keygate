@@ -21,8 +21,8 @@ func (s *Store) ExpectedSigningIdentity(ctx context.Context, physical offline.Pu
 		return expected, err
 	}
 	if err == nil {
-		var saved offline.PublicIdentity
-		if json.Unmarshal([]byte(raw), &saved) != nil {
+		var saved *offline.PublicIdentity
+		if json.Unmarshal([]byte(raw), &saved) != nil || saved == nil {
 			return invalid()
 		}
 		if saved.KeyID == "" && saved.PublicKeyPEM == "" {
@@ -35,7 +35,7 @@ func (s *Store) ExpectedSigningIdentity(ctx context.Context, physical offline.Pu
 			if expected.KeyID != "" && expected.KeyID != saved.KeyID {
 				return invalid()
 			}
-			expected = saved
+			expected = *saved
 		}
 	}
 	var ids []string

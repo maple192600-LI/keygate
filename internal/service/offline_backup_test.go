@@ -107,7 +107,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = backup.ValidateRestoreContinuity(ctx, candidate); err != nil {
+	if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err != nil {
 		t.Fatal(err)
 	}
 	for revision := int64(1); revision <= 2; revision++ {
@@ -115,7 +115,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 		if _, err = svc.Issue(ctx, actor, prepareOfflineCommand(t, svc, intent)); err != nil {
 			t.Fatal(err)
 		}
-		if err = backup.ValidateRestoreContinuity(ctx, candidate); err == nil {
+		if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err == nil {
 			t.Fatal("old preview erased newer issuance")
 		}
 	}
@@ -135,7 +135,7 @@ func TestOfflineRestoreRejectsIssuanceRollbackAtConfirmation(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = backup.ValidateRestoreContinuity(ctx, current); err != nil {
+	if err = backup.ValidateRestoreContinuity(ctx, current, ""); err != nil {
 		t.Fatal(err)
 	}
 	keys := offline.NewKeyStore(current.IdentityRoot)
@@ -213,7 +213,7 @@ func TestOfflineUnregisteredEmptyBackupAndBundleRemainUsable(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if err = backup.ValidateRestoreContinuity(ctx, candidate); err != nil {
+	if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err != nil {
 		t.Fatal(err)
 	}
 	bundleRaw, err := backup.ExportBusiness(ctx)
@@ -237,6 +237,12 @@ func TestOfflineUnregisteredEmptyBackupAndBundleRemainUsable(t *testing.T) {
 	}
 	if expected, e := target.ExpectedSigningIdentity(ctx, created); e != nil || expected.KeyID != created.KeyID {
 		t.Fatal("first identity blocked", e)
+	}
+	if err = target.SetSetting(ctx, "snail_public_identity", "null"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = target.ExpectedSigningIdentity(ctx, created); err == nil {
+		t.Fatal("null identity record accepted as an empty registration")
 	}
 }
 func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *testing.T) {
@@ -282,7 +288,16 @@ func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *te
 		if e != nil {
 			t.Fatal(e)
 		}
-		e = backup.ValidateRestoreContinuity(ctx, candidate)
+		if test.allow {
+			required, ok := backup.ValidateRestoreContinuity(ctx, candidate, "").(*offline.Error)
+			if !ok || required.Code != "RESTORE_SIGNING_PASSWORD_REQUIRED" {
+				t.Fatal("damaged identity recovery did not require signing password")
+			}
+			if backup.ValidateRestoreContinuity(ctx, candidate, "Wrong-signing-password") == nil {
+				t.Fatal("wrong signing password accepted")
+			}
+		}
+		e = backup.ValidateRestoreContinuity(ctx, candidate, "Synthetic-service-signing-password")
 		if test.allow {
 			if e != nil {
 				t.Fatal("healthy same-identity backup blocked", e)
@@ -303,6 +318,45 @@ func TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity(t *te
 		if e = backup.DiscardRestore(ctx, candidate); e != nil {
 			t.Fatal(e)
 		}
+	}
+	plain, err := offline.OpenBackup(raw, "Synthetic-corrupt-active-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload FullBackupPayload
+	if err = json.Unmarshal(plain, &payload); err != nil {
+		t.Fatal(err)
+	}
+	clear(plain)
+	container, err := offline.ParseContainer(payload.IdentityFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstByte := "A"
+	if container.CiphertextB64[0] == 'A' {
+		firstByte = "B"
+	}
+	container.CiphertextB64 = firstByte + container.CiphertextB64[1:]
+	payload.IdentityFile, _ = json.Marshal(container)
+	payload.IdentitySHA256 = digest(payload.IdentityFile)
+	plain, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt, err := offline.SealBackup(plain, "Synthetic-corrupt-active-key")
+	clear(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := backup.PreviewRestore(ctx, corrupt, "Synthetic-corrupt-active-key")
+	if err != nil {
+		t.Fatal("structural corruption was not isolated to ciphertext", err)
+	}
+	if backup.ValidateRestoreContinuity(ctx, candidate, "Synthetic-service-signing-password") == nil {
+		t.Fatal("unusable replacement ciphertext accepted")
+	}
+	if err = backup.DiscardRestore(ctx, candidate); err != nil {
+		t.Fatal(err)
 	}
 	if countOfflineRows(t, svc.Store, "license_issuances") != 1 {
 		t.Fatal("source issuance history changed")

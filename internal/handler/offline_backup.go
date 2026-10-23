@@ -245,8 +245,9 @@ func (h *OfflineBackupHandler) password(c *gin.Context, value string) bool {
 }
 func (h *OfflineBackupHandler) ConfirmRestore(c *gin.Context) {
 	var input struct {
-		PreviewID     string `json:"previewId"`
-		OwnerPassword string `json:"ownerPassword"`
+		PreviewID         string `json:"previewId"`
+		OwnerPassword     string `json:"ownerPassword"`
+		SigningPassphrase string `json:"signingPassphrase"`
 	}
 	if !LocalJSON(c, &input) || !h.password(c, input.OwnerPassword) {
 		return
@@ -256,7 +257,7 @@ func (h *OfflineBackupHandler) ConfirmRestore(c *gin.Context) {
 		response.Err(c, 409, "PREVIEW_EXPIRED", "恢复预览已失效，请重新选择文件")
 		return
 	}
-	if err := h.Service.ValidateRestoreContinuity(c, p.candidate); err != nil {
+	if err := h.Service.ValidateRestoreContinuity(c, p.candidate, input.SigningPassphrase); err != nil {
 		localOfflineError(c, err)
 		return
 	}

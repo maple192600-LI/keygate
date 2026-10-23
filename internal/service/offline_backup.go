@@ -244,11 +244,12 @@ func mustJSON(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 // Called at confirmation while the local write gate is held. Preview age alone
 // cannot protect originals issued after the preview or after an old backup.
-func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c *RestoreCandidate) error {
+func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c *RestoreCandidate, signingPassphrase string) error {
 	if c == nil || c.Store == nil {
 		return backupFailure("恢复候选不可用")
 	}
 	physical, err := s.Keys.Status()
+	damagedIdentity := err != nil
 	var expected offline.PublicIdentity
 	if err != nil {
 		// A damaged active container must not block a verified full recovery.
@@ -271,6 +272,20 @@ func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c 
 	}
 	if expected.KeyID != "" && expected.KeyID != restored.KeyID {
 		return backupFailure("备份缺少当前已登记的签发身份")
+	}
+	if damagedIdentity {
+		if signingPassphrase == "" {
+			return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件损坏，请填写原签发密码验证备份中的身份后恢复"}
+		}
+		keys := offline.NewKeyStore(c.IdentityRoot)
+		defer keys.Lock()
+		identity, unlockErr := keys.Unlock(signingPassphrase, time.Now().Add(time.Minute))
+		if unlockErr != nil {
+			return unlockErr
+		}
+		if identity.KeyID != expected.KeyID {
+			return backupFailure("备份中的签发身份与当前登记不一致")
+		}
 	}
 	type fact struct {
 		LicenseID string
