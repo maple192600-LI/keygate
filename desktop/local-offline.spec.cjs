@@ -690,6 +690,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   details = await showLicenseDetails(page, licenseNumber);
   await expect(details.getByText('合成设备一', { exact: true })).toBeVisible();
   await details.getByRole('button', { name: '续期', exact: true }).click();
+  await expect(details).toHaveCount(0);
   let lifecycle = page.getByRole('dialog');
   await lifecycle.getByLabel('数量', { exact: true }).fill('7');
   await lifecycle.getByRole('button', { name: '预览授权条件', exact: true }).click();
@@ -703,7 +704,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(renewed.licenseNumber, licenseNumber);
   assert.equal(renewed.licenseCode, undefined);
   await lifecycle.getByRole('button', { name: /^(关闭|Close)$/ }).click();
-  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await expect(lifecycle).toHaveCount(0);
   details = await showLicenseDetails(page, licenseNumber);
   const renewedCode = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/code');
   assert.ok(renewedCode.value.data.licenseCode === licenseCode, 'renewal preserves activation code');
@@ -712,6 +713,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.ok(expiring.value.data.items.some(item => item.id === licenseID));
 
   await details.getByRole('button', { name: '办理换机', exact: true }).click();
+  await expect(details).toHaveCount(0);
   lifecycle = page.getByRole('dialog');
   await lifecycle.getByLabel('换机原因', { exact: true }).fill('隔离换机验收');
   await lifecycle.getByRole('button', { name: '预览换机', exact: true }).click();
