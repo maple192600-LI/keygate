@@ -6,7 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const { startRuntime, waitForHealth, systemExe } = require('./runtime.cjs');
 
-const productName = '小云雀客户授权中心';
+const productName = '小团雀客户授权中心';
 app.setName(productName);
 process.stderr.write('MANAGER_STAGE name-set\n');
 const serviceHostMode = process.argv.includes('--service-host');
@@ -214,7 +214,7 @@ const startup = app.whenReady().then(async () => {
   createWindow(session);
 }).finally(() => { starting = false; }).catch(error => {
   process.stderr.write(`MANAGER_START_FAILED ${error.name} ${error.code || 'none'} ${error.cause?.code || 'none'}\n`);
-  if (!serviceHostMode && !stopRequested) dialog.showErrorBox('小云雀客户授权中心未能启动', `${error.message}\n现有资料保留。`);
+  if (!serviceHostMode && !stopRequested) dialog.showErrorBox('小团雀客户授权中心未能启动', `${error.message}\n现有资料保留。`);
   app.quit();
 });
 

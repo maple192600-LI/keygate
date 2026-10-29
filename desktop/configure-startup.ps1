@@ -9,9 +9,9 @@ $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $entryName = 'XiaoYunqueAuthorizationCenter'
 
 if ($Action -eq 'Install') {
-  $appPath = Join-Path $PSScriptRoot '小云雀客户授权中心.exe'
+  $appPath = Join-Path $PSScriptRoot '小团雀客户授权中心.exe'
   if (-not (Test-Path -LiteralPath $appPath -PathType Leaf)) {
-    throw '请从小云雀客户授权中心程序目录运行此脚本。'
+    throw '请从小团雀客户授权中心程序目录运行此脚本。'
   }
   $command = '"' + $appPath + '" --startup'
   New-Item -Path $runKey -Force | Out-Null

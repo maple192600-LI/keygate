@@ -2,7 +2,7 @@
   "name": "snail-license-center",
   "version": "0.1.1",
   "private": true,
-  "description": "小云雀客户授权中心 Windows 管理端",
+  "description": "小团雀客户授权中心 Windows 管理端",
   "author": "snail-finance",
   "license": "AGPL-3.0-only",
   "main": "main.cjs",

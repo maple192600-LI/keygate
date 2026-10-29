@@ -183,14 +183,14 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
         if (password !== confirm) throw new Error("两次密码输入不一致")
         if (mode === "backup") {
           if (!window.confirm("备份将包含加密的授权服务身份。请将备份文件和密码分开保管，是否继续？")) return
-          await localDownload("/admin/backups", "小云雀管理资料.snailbackup", {
+          await localDownload("/admin/backups", "小团雀管理资料.snailbackup", {
             password,
             includeIdentity: true,
             confirmIdentity: true,
           })
           setNotice("备份文件已生成")
         } else {
-          await localDownload("/admin/business-bundle/export", "小云雀管理数据.snailbundle", { password })
+          await localDownload("/admin/business-bundle/export", "小团雀管理数据.snailbundle", { password })
           setNotice("加密移交包已生成")
         }
         reset()

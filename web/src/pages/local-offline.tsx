@@ -52,7 +52,7 @@ export default function LocalOfflineApp() {
     [creatingCustomer, setCreatingCustomer] = useState(false)
   const [epoch, setEpoch] = useState(0)
   useEffect(() => {
-    document.title = "小云雀客户授权中心"
+    document.title = "小团雀客户授权中心"
   }, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: reload retries the initial connection after a service error.
   useEffect(() => {
@@ -141,7 +141,7 @@ export default function LocalOfflineApp() {
           <aside className="lc-sidebar">
             <div className="lc-brand">
               <img src="/xiaoyunque-icon.svg" alt="" />
-              <strong>小云雀客户授权中心</strong>
+              <strong>小团雀客户授权中心</strong>
             </div>
             <nav aria-label="管理导航">
               {(
@@ -492,7 +492,7 @@ function LoginForm({
   }
   return (
     <main className="mx-auto grid min-h-screen max-w-md content-center gap-6 px-6 py-10">
-      <h1 className="text-2xl font-semibold">{setup ? "首次设置" : "小云雀客户授权中心"}</h1>
+      <h1 className="text-2xl font-semibold">{setup ? "首次设置" : "小团雀客户授权中心"}</h1>
       <form className="grid gap-5 rounded-xl border bg-card p-6" onSubmit={submit}>
         <Field name="username" label="管理用户名">
           <Input
