@@ -211,3 +211,17 @@ PR2已合入413604e，随后远端复核指出空身份登记及活动身份损�
 复审进一步指出缺失文件会报告uncreated而非错误。恢复包含已登记原身份的备份时，缺失与损坏活动容器均须实际解锁候选；仍允许不带身份的备份保留已登记公钥、等待后来导入原身份，不允许改建其他身份。新增missing子场景在bdb8cfe失败，修复后与corrupt子场景共同通过；两者均覆盖缺密码、错密码、同身份正常恢复后继续r2及结构有效但GCM密文不可解的拒绝，源库原件仍为r1。
 
 最终复测使用已运行的隔离PostgreSQL。`go test ./internal/service -run '^TestOfflineRestoreRepairsCorruptActiveContainerFromRegisteredIdentity$' -count=1`通过（5.813秒）；恢复相关两项组合通过（9.000秒）。重新`go build -o bin/snail-license-center.exe ./cmd/server`后，`SNAIL_CLIENT_ROOT=<本任务客户端工作树> SNAIL_MANAGER_TEST_POSTGRES=<已核验PostgreSQL> node --test desktop/local-offline.spec.cjs`再次1/1通过（31.41秒），证据为Temp/snail-keygate-t03-61ag04。完整日志manager-missing-red.log、manager-missing-green.log、manager-recovery-final.log和manager-missing-electron-final.log收录于本轮交付证据；源码提交身份及最终独立复审结果在交付回执记录。没有生成正式新包、读取正式私钥或替换用户原程序。
+
+## 2026-10-29 授权码升级
+
+当前产品候选 `e18b088924bbb2815f697d3d1309c5160786ca09` 基于 `07499ee6391c911184d412fbf32442a31e086772`，分支 `codex/authorization-center-20261029`，草稿 [PR5](https://github.com/maple192600-LI/keygate/pull/5)。客户端对应[PR159](https://github.com/maple192600-LI/snail-finance/pull/159)。当前没有域名，仅预留接口及配置；历史交付记录不能替代本轮验收。
+
+本轮改为原授权码激活/同步、SMBIOS UUID 摘要、完整购买期限和永久、签名设备转出；恢复概览、客户、授权、交付记录及设置，保留新增即将到期，使用统一蓝鸟图标。账号、账套权限及会计规则未改变。既有 `license_deliveries` 增加授权关联并回填，授权码交付允许无签发原件；同表保存历史、审计与幂等。存在码交付时拒绝向下迁移，部署恢复使用完整加密备份，不能为降 Schema 删除事实。
+
+相关 Go 核心/HTTP、交付跨激活续期、历史回填、Bundle/FullBackup 和指定日期定向场景通过；旧整体五包运行曾失败，不能拼成一次五包全绿。最终期限及真实 Node 双向互验 5/5 通过。管理 Electron 的登录启动场景 1/1（5.4秒）和主授权场景 1/1（19.9秒，0 skipped）分别通过。主场景实际执行导航、发放恢复、明码显示/系统剪贴板替换、交付历史/筛选、续费换机、错密拒绝/正确备份恢复、移交账号隔离和重开停服。新增图标在新隔离初始窗口实际核对，未创建账号或客户。各受影响候选独立复审无未处理发现。
+
+直接派生长期后台子进程曾使 Electron 的退出事件完成后仍不退出；当前由既有 Windows PowerShell 交接独立后台，保留健康身份验证与正式停止入口。实际关窗退出、后台和PG继续可用、重开复用同一宿主，以及最后正常停机已验证，没有以强退修复产品。
+
+两个独立本机服务/数据库实例通过完整加密备份迁移并保留相同签发身份、原码和期限；先暂停入口、停止源写入，再恢复及切换，没有双写。真实小团雀沿原入口取得目标续费修订；原生替换取消/确认、永久重开、签名转出和断开连接后重开只读均通过。转出证据是正常启动同步及离线保存，不是实时撤销。
+
+Go产物 SHA-256：`1D054FCB74F17D11372C572FB58457B906272BA2900543814C46D6DEBADE68BA`。本轮未生成或安装正式客户包，未实际重装Windows，未部署公网或发布，不宣称全部18项验收完成。所有合成服务、数据库及客户进程已停止，19个隔离根、任务链接、测试凭据和无用缓存已清理；一次工具截图包含的合成码已通过原入口停发并验证拒绝激活。未替换现用安装或写入真实账套。未合并源码、必要原始证据及构建工具保留用于草稿审查。
