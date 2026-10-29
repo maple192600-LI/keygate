@@ -263,7 +263,10 @@ async function saveDownload(app, page, file, buttonName) {
 function assertEncryptedFile(file, secrets) {
   const bytes = fs.readFileSync(file);
   assert.ok(bytes.length > 0);
-  assert.throws(() => JSON.parse(bytes.toString('utf8')));
+  const envelope = JSON.parse(bytes.toString('utf8'));
+  assert.equal(envelope.formatVersion, 1);
+  assert.equal(envelope.kind, 'snail-full-backup');
+  assert.ok(typeof envelope.ciphertextB64 === 'string' && envelope.ciphertextB64.length > 16);
   for (const secret of secrets) assert.equal(bytes.includes(Buffer.from(secret)), false);
   return bytes;
 }
@@ -795,8 +798,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   page.once('dialog', dialog => dialog.accept());
   const backupBytes = await saveDownload(app, dataDialog, backupFile, '生成备份');
   assert.ok(backupBytes.length > 0);
-  assert.throws(() => JSON.parse(backupBytes.toString('utf8')));
-  assert.equal(backupBytes.includes(Buffer.from(licenseCode)), false);
+  assertEncryptedFile(backupFile, [licenseCode]);
   await expect(dataDialog).toHaveCount(0);
 
   await page.getByRole('button', { name: '恢复备份', exact: true }).click();
