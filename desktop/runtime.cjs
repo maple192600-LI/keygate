@@ -234,4 +234,4 @@ async function startRuntime({ dataRoot, postgresRoot, serverRoot, serverExecutab
   return { address, stop, setupToken: shutdownToken, serverPid: child.pid, exited };
   } catch (error) { try { await stop(); } catch (shutdownError) { throw new AggregateError([error, shutdownError], '管理端启动及关闭失败，请保留运行日志与资料。'); }; throw error; }
 }
-module.exports = { startRuntime, secrets, availableRuntimePort, waitForHealth, nativePostgresPaths, privateMappingDirectory };
+module.exports = { startRuntime, secrets, availableRuntimePort, waitForHealth, nativePostgresPaths, privateMappingDirectory, systemExe };

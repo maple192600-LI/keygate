@@ -2,9 +2,9 @@
 const { app, BrowserWindow, dialog, shell } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
-const { startRuntime, waitForHealth } = require('./runtime.cjs');
+const { startRuntime, waitForHealth, systemExe } = require('./runtime.cjs');
 
 const productName = '小云雀客户授权中心';
 app.setName(productName);
@@ -68,18 +68,23 @@ async function connectToService() {
 
 async function startServiceHost() {
   const args = app.isPackaged ? ['--service-host'] : [app.getAppPath(), '--service-host'];
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore',
-    env: { ...process.env, SNAIL_MANAGER_DATA_ROOT: dataRoot },
-  });
-  let spawnError;
-  child.on('error', error => { spawnError = error; });
-  child.unref();
+  const commandArgs = args.map(arg => `"${arg}"`).join(' ');
+  const script = `$ErrorActionPreference='Stop'; Start-Process -FilePath '${process.execPath.replaceAll("'", "''")}' -ArgumentList '${commandArgs.replaceAll("'", "''")}' -WindowStyle Hidden | Out-Null`;
+  // Windows owns the long-lived host so Electron's native shutdown does not wait on its child handle.
+  try {
+    execFileSync(systemExe('WindowsPowerShell/v1.0/powershell.exe'), [
+      '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+    ], {
+      windowsHide: true,
+      stdio: 'ignore',
+      env: { ...process.env, SNAIL_MANAGER_DATA_ROOT: dataRoot },
+      timeout: 10000,
+    });
+  } catch (cause) {
+    throw new Error('后台服务进程未能启动，请检查服务日志；现有资料已保留。', { cause });
+  }
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    if (spawnError) throw new Error('后台服务进程未能启动，请检查服务日志；现有资料已保留。', { cause: spawnError });
     const session = readSession();
     if (session?.state === 'running') {
       try {
@@ -89,7 +94,6 @@ async function startServiceHost() {
         if (processExists(session.pid)) throw new Error('后台服务未能通过本机身份检查，现有资料已保留。', { cause: error });
       }
     }
-    if (child.exitCode !== null) throw new Error('后台服务进程未能启动，请检查服务日志；现有资料已保留。');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error('后台服务启动超时，请检查服务日志；现有资料已保留。');
