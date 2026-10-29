@@ -135,7 +135,8 @@ async function managerProcessIDs(app) {
 async function logManagerQuitEvents(app, scenario, startedAt, pids) {
   await app.evaluate(({ app, BrowserWindow }, { scenario, playwrightChildPID }) => {
     for (const eventName of ['window-all-closed', 'before-quit', 'will-quit']) {
-      app.once(eventName, () => {
+      // The product's window-all-closed handler calls quit synchronously.
+      app.prependOnceListener(eventName, () => {
         const windowCount = BrowserWindow.getAllWindows().length;
         process.stderr.write(
           `T03_MANAGER_EVENT ${scenario} ${eventName} electronProcessPID=${process.pid} playwrightChildPID=${playwrightChildPID} windows=${windowCount}\n`,
@@ -158,6 +159,10 @@ function taskRuntimeState(dataRoot, postgresRoot) {
 }
 
 async function closeManagerInCleanup(app, scenario, startedAt, dataRoot, postgresRoot) {
+  if (app.process().exitCode !== null || app.process().signalCode) {
+    logTestPhase(scenario, startedAt, 'cleanup-manager-already-exited');
+    return;
+  }
   const pids = await managerProcessIDs(app);
   await logManagerQuitEvents(app, scenario, startedAt, pids);
   logTestPhase(scenario, startedAt, `cleanup-runtime-before-app-close ${taskRuntimeState(dataRoot, postgresRoot)}`);
