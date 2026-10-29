@@ -79,12 +79,88 @@ async function launchManager(scenario, startedAt, options) {
   try {
     const app = await _electron.launch(options);
     forwardManagerStderr(app, scenario);
-    logTestPhase(scenario, startedAt, `electron-launch-ready managerPID=${app.process().pid}`);
+    const pids = await managerProcessIDs(app);
+    logTestPhase(
+      scenario,
+      startedAt,
+      `electron-launch-ready electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID}`,
+    );
     return app;
   } catch (error) {
     logTestPhase(scenario, startedAt, 'electron-launch-rejected');
     throw error;
   }
+}
+
+async function focusManagerWindow(app, page) {
+  const window = await app.browserWindow(page);
+  await window.evaluate(browserWindow => {
+    browserWindow.show();
+    browserWindow.focus();
+  });
+  await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
+}
+
+async function copyFromFocusedWindow(app, page, button, expectedText) {
+  await focusManagerWindow(app, page);
+  await button.click();
+  await expect.poll(async () => {
+    if (await page.getByRole('alert').count()) return 'alert';
+    const clipboardText = await app.evaluate(({ clipboard }) => clipboard.readText());
+    if (await page.getByRole('alert').count()) return 'alert';
+    return clipboardText === expectedText ? 'copied' : 'waiting';
+  }).toBe('copied');
+}
+
+async function managerProcessIDs(app) {
+  return {
+    electronProcessPID: await app.evaluate(() => process.pid),
+    playwrightChildPID: app.process().pid,
+  };
+}
+
+async function logManagerQuitEvents(app, scenario, startedAt, pids) {
+  await app.evaluate(({ app, BrowserWindow }, { scenario, playwrightChildPID }) => {
+    for (const eventName of ['window-all-closed', 'before-quit', 'will-quit']) {
+      app.once(eventName, () => {
+        const windowCount = BrowserWindow.getAllWindows().length;
+        process.stderr.write(
+          `T03_MANAGER_EVENT ${scenario} ${eventName} electronProcessPID=${process.pid} playwrightChildPID=${playwrightChildPID} windows=${windowCount}\n`,
+        );
+      });
+    }
+  }, { scenario, playwrightChildPID: pids.playwrightChildPID });
+  logTestPhase(
+    scenario,
+    startedAt,
+    `quit-event-probe-armed electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID}`,
+  );
+}
+
+function taskRuntimeState(dataRoot, postgresRoot) {
+  const sessionPath = path.join(dataRoot, 'runtime-session.json');
+  if (!fs.existsSync(sessionPath)) return 'runtimeSession=absent';
+  const session = readSession(dataRoot);
+  return `serviceHostPID=${session.pid} serviceState=${session.state} serviceHostAlive=${processIsAlive(session.pid)} postgresStatus=${postgresStatus(postgresRoot, dataRoot).status}`;
+}
+
+async function closeManagerInCleanup(app, scenario, startedAt, dataRoot, postgresRoot) {
+  const pids = await managerProcessIDs(app);
+  await logManagerQuitEvents(app, scenario, startedAt, pids);
+  logTestPhase(scenario, startedAt, `cleanup-runtime-before-app-close ${taskRuntimeState(dataRoot, postgresRoot)}`);
+  logTestPhase(
+    scenario,
+    startedAt,
+    `playwright-app-close-begin electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID}`,
+  );
+  await app.close();
+  await expect.poll(() => processIsAlive(pids.electronProcessPID)).toBe(false);
+  assert.equal(processIsAlive(pids.playwrightChildPID), false, 'Playwright child process exited after app.close');
+  logTestPhase(
+    scenario,
+    startedAt,
+    `playwright-app-close-complete electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID} ${taskRuntimeState(dataRoot, postgresRoot)}`,
+  );
 }
 
 async function waitForExit(child, timeout, label) {
@@ -179,11 +255,12 @@ async function setupOwner(app, page, username, password, siteName, contact) {
   await expect(page.getByRole('heading', { name: '保存账号恢复凭据', exact: true })).toBeVisible();
   const recoveryCredential = await page.locator('code').innerText();
   assert.ok(/^SNAIL-RECOVERY-[A-Fa-f0-9]{64}$/.test(recoveryCredential), 'recovery credential format');
-  await page.bringToFront();
-  await page.getByRole('button', { name: '复制恢复凭据', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  const copiedCredential = await app.evaluate(({ clipboard }) => clipboard.readText());
-  assert.ok(copiedCredential === recoveryCredential, 'recovery credential clipboard readback');
+  await copyFromFocusedWindow(
+    app,
+    page,
+    page.getByRole('button', { name: '复制恢复凭据', exact: true }),
+    recoveryCredential,
+  );
   await page.getByRole('button', { name: '已妥善保存，继续登录', exact: true }).click();
   return recoveryCredential;
 }
@@ -212,35 +289,40 @@ async function showLicenseDetails(page, licenseNumber) {
   return page.getByRole('dialog', { name: '授权详情', exact: true });
 }
 
-async function closeWindowAndWait(app, scenario, startedAt) {
+async function closeWindowAndWait(app, scenario, startedAt, dataRoot, postgresRoot) {
   const child = app.process();
-  const managerPID = child.pid;
+  const pids = await managerProcessIDs(app);
   let stderr = '';
   const collectStderr = chunk => { stderr += chunk.toString(); };
   child.stderr?.on('data', collectStderr);
-  logTestPhase(scenario, startedAt, `normal-window-close-listeners-begin managerPID=${managerPID}`);
-  await app.evaluate(({ app }) => {
-    for (const eventName of ['window-all-closed', 'before-quit', 'will-quit']) {
-      app.once(eventName, () => process.stderr.write('T03_MANAGER_EVENT ' + eventName + '\n'));
-    }
-  });
-  logTestPhase(scenario, startedAt, `normal-window-close-request managerPID=${managerPID}`);
-  const exited = waitForExit(child, 30000, '管理窗口进程 ' + managerPID);
+  await logManagerQuitEvents(app, scenario, startedAt, pids);
+  logTestPhase(
+    scenario,
+    startedAt,
+    `normal-window-close-request electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID}`,
+  );
+  const exited = waitForExit(child, 30000, 'Playwright child process ' + pids.playwrightChildPID);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
-  logTestPhase(scenario, startedAt, `normal-window-close-requested managerPID=${managerPID}`);
+  logTestPhase(scenario, startedAt, `normal-window-close-requested electronProcessPID=${pids.electronProcessPID}`);
   try {
     await exited;
   } catch (error) {
-    console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ managerPID, stderr }));
+    console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ ...pids, stderr }));
     throw error;
   }
-  logTestPhase(scenario, startedAt, `normal-window-close-process-exited managerPID=${managerPID}`);
+  await expect.poll(() => processIsAlive(pids.electronProcessPID)).toBe(false);
+  assert.equal(processIsAlive(pids.playwrightChildPID), false, 'Playwright child process exited after window close');
+  logTestPhase(
+    scenario,
+    startedAt,
+    `normal-window-close-process-exited electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID}`,
+  );
   child.stderr?.off('data', collectStderr);
-  const events = [...stderr.matchAll(/T03_MANAGER_EVENT (window-all-closed|before-quit|will-quit)/g)].map(match => match[1]);
-  console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ managerPID, events }));
+  const events = [...stderr.matchAll(/T03_MANAGER_EVENT \S+ (window-all-closed|before-quit|will-quit) /g)].map(match => match[1]);
+  console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ ...pids, events }));
   assert.deepEqual(events, ['window-all-closed', 'before-quit', 'will-quit']);
-  assert.equal(processIsAlive(managerPID), false);
-  return managerPID;
+  logTestPhase(scenario, startedAt, `service-after-manager-exit ${taskRuntimeState(dataRoot, postgresRoot)}`);
+  return pids.electronProcessPID;
 }
 
 test('Windows 登录启动期间的普通打开请求会在服务就绪后显示管理窗口', { timeout: 120000 }, async t => {
@@ -254,9 +336,7 @@ test('Windows 登录启动期间的普通打开请求会在服务就绪后显示
   t.after(async () => {
     logTestPhase(scenario, startedAt, 'cleanup-begin');
     if (app) {
-      logTestPhase(scenario, startedAt, 'playwright-app-close-begin');
-      await app.close();
-      logTestPhase(scenario, startedAt, 'playwright-app-close-complete');
+      await closeManagerInCleanup(app, scenario, startedAt, dataRoot, postgresRoot);
     }
     logTestPhase(scenario, startedAt, 'owned-host-stop-begin');
     stopOwnedHost(root, dataRoot, postgresRoot);
@@ -294,14 +374,20 @@ test('Windows 登录启动期间的普通打开请求会在服务就绪后显示
   await expect(page.getByRole('heading', { name: '首次设置', exact: true })).toBeVisible();
   const session = readSession(dataRoot);
   assert.equal(session.state, 'running');
-  const managerPID = app.process().pid;
-  assert.notEqual(session.pid, managerPID);
-  assert.equal(processIsAlive(managerPID), true);
+  const pids = await managerProcessIDs(app);
+  assert.notEqual(session.pid, pids.electronProcessPID);
+  assert.notEqual(session.pid, pids.playwrightChildPID);
+  assert.equal(processIsAlive(pids.electronProcessPID), true);
+  assert.equal(processIsAlive(pids.playwrightChildPID), true);
   await waitForHealth(session.address, { exitCode: null, signalCode: null }, session.setupToken, 5000);
   assert.equal(postgresStatus(postgresRoot, dataRoot).status, 0);
-  console.log('T03_STARTUP_PROCESSES', JSON.stringify({ managerPID, serviceHostPID: session.pid }));
+  console.log('T03_STARTUP_PROCESSES', JSON.stringify({ ...pids, serviceHostPID: session.pid }));
   console.log('T03_STARTUP_EVIDENCE', root);
-  logTestPhase(scenario, startedAt, `startup-assertions-complete managerPID=${managerPID} serviceHostPID=${session.pid}`);
+  logTestPhase(
+    scenario,
+    startedAt,
+    `startup-assertions-complete electronProcessPID=${pids.electronProcessPID} playwrightChildPID=${pids.playwrightChildPID} serviceHostPID=${session.pid}`,
+  );
 });
 
 test('授权码签发恢复、续期换机、备份移交、账号隔离与服务关闭重开', { timeout: 300000 }, async t => {
@@ -317,9 +403,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   t.after(async () => {
     logTestPhase(scenario, startedAt, 'cleanup-begin');
     if (app) {
-      logTestPhase(scenario, startedAt, 'playwright-app-close-begin');
-      await app.close();
-      logTestPhase(scenario, startedAt, 'playwright-app-close-complete');
+      await closeManagerInCleanup(app, scenario, startedAt, dataRoot, postgresRoot);
     }
     logTestPhase(scenario, startedAt, 'target-host-stop-begin');
     stopOwnedHost(root, targetDataRoot, postgresRoot);
@@ -443,12 +527,14 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(createResult.licenseNumber, licenseNumber);
   await expect(issue.getByText(licenseNumber, { exact: true })).toBeVisible();
   assert.ok((await issue.locator('dd').allInnerTexts()).some(text => text.trim() === licenseCode), 'issued code is visible');
-  await page.bringToFront();
   await expect(issue.getByRole('button', { name: '复制授权码', exact: true })).toBeVisible();
-  await issue.getByRole('button', { name: '复制授权码', exact: true }).click();
+  await copyFromFocusedWindow(
+    app,
+    page,
+    issue.getByRole('button', { name: '复制授权码', exact: true }),
+    licenseCode,
+  );
   await expect(issue.getByRole('status')).toHaveText('授权码已复制');
-  const issuedClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
-  assert.ok(issuedClipboard === licenseCode, 'issued activation code clipboard readback');
   await issue.getByRole('button', { name: /^(关闭|Close)$/ }).click();
 
   const codeReply = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/code');
@@ -481,11 +567,12 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await details.getByRole('button', { name: '显示授权码', exact: true }).click();
   assert.ok((await details.locator('dd').allInnerTexts()).some(text => text.trim() === licenseCode), 'detail code is visible');
   await expect(details.getByRole('button', { name: '复制授权码', exact: true })).toBeVisible();
-  await page.bringToFront();
-  await details.getByRole('button', { name: '复制授权码', exact: true }).click();
-  await expect(details.getByRole('alert')).toHaveCount(0);
-  const detailClipboard = await app.evaluate(({ clipboard }) => clipboard.readText());
-  assert.ok(detailClipboard === licenseCode, 'detail activation code clipboard readback');
+  await copyFromFocusedWindow(
+    app,
+    page,
+    details.getByRole('button', { name: '复制授权码', exact: true }),
+    licenseCode,
+  );
 
   const firstDevice = {
     type: 'windows-smbios-uuid-sha256/v1',
@@ -651,7 +738,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
 
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  await closeWindowAndWait(app, scenario, startedAt);
+  await closeWindowAndWait(app, scenario, startedAt, dataRoot, postgresRoot);
   app = null;
   assert.equal(processIsAlive(sourceSession.pid), true);
   await waitForHealth(sourceSession.address, { exitCode: null, signalCode: null }, sourceSession.setupToken, 5000);
@@ -680,7 +767,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await page.getByRole('button', { name: '客户', exact: true }).click();
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  await closeWindowAndWait(app, scenario, startedAt);
+  await closeWindowAndWait(app, scenario, startedAt, dataRoot, postgresRoot);
   app = null;
 
   fs.mkdirSync(path.join(root, 'target-appdata'));
@@ -757,7 +844,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.ok(importedCode.value.data.licenseCode === licenseCode, 'business bundle preserves activation code');
 
   const targetSession = readSession(targetDataRoot);
-  await closeWindowAndWait(app, scenario, startedAt);
+  await closeWindowAndWait(app, scenario, startedAt, targetDataRoot, postgresRoot);
   app = null;
   assert.equal(processIsAlive(targetSession.pid), true);
   await waitForHealth(targetSession.address, { exitCode: null, signalCode: null }, targetSession.setupToken, 5000);
