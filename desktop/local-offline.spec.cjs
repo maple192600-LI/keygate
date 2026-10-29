@@ -101,8 +101,11 @@ async function focusManagerWindow(app, page) {
   await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
 }
 
-async function copyFromFocusedWindow(app, page, button, expectedText) {
+async function copyFromFocusedWindow(app, page, button, expectedText, successStatus) {
   await focusManagerWindow(app, page);
+  const sentinel = `T03-SPEC-COPY-${randomUUID()}`;
+  await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), sentinel);
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(sentinel);
   await button.click();
   await expect.poll(async () => {
     if (await page.getByRole('alert').count()) return 'alert';
@@ -110,6 +113,7 @@ async function copyFromFocusedWindow(app, page, button, expectedText) {
     if (await page.getByRole('alert').count()) return 'alert';
     return clipboardText === expectedText ? 'copied' : 'waiting';
   }).toBe('copied');
+  if (successStatus) await expect(page.getByRole('status')).toHaveText(successStatus);
 }
 
 async function managerProcessIDs(app) {
@@ -546,8 +550,8 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     page,
     issue.getByRole('button', { name: '复制授权码', exact: true }),
     licenseCode,
+    '授权码已复制',
   );
-  await expect(issue.getByRole('status')).toHaveText('授权码已复制');
   await issue.getByRole('button', { name: /^(关闭|Close)$/ }).click();
 
   const codeReply = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/code');
