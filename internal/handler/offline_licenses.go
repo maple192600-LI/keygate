@@ -84,12 +84,12 @@ func (h *OfflineLicenseHandler) Code(c *gin.Context) {
 	response.OK(c, gin.H{"licenseCode": code})
 }
 func (h *OfflineLicenseHandler) Operation(c *gin.Context) {
-	row, err := h.Service.Store.IssuanceOperation(c, c.Param("operationId"))
+	result, err := h.Service.Operation(c, c.Param("operationId"))
 	if err != nil {
 		h.fail(c, err)
 		return
 	}
-	response.OK(c, service.IssuanceResult(row, true))
+	response.OK(c, result)
 }
 func (h *OfflineLicenseHandler) fail(c *gin.Context, err error) {
 	if errors.Is(err, sql.ErrNoRows) {

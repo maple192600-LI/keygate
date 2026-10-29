@@ -132,7 +132,7 @@ export function MerchantSettings() {
   )
 }
 export default function LocalDataSettings({ onImported }: { onImported: () => void }) {
-  const [mode, setMode] = useState<"" | "backup" | "bundle" | "restore">(""),
+  const [mode, setMode] = useState<"" | "backup" | "bundle-export" | "bundle" | "restore">(""),
     [file, setFile] = useState<File | null>(null),
     [password, setPassword] = useState(""),
     [confirm, setConfirm] = useState(""),
@@ -179,15 +179,20 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
   async function submit(e: FormEvent) {
     e.preventDefault()
     await perform(async () => {
-      if (mode === "backup") {
-        if (password !== confirm) throw new Error("两次备份密码输入不一致")
-        if (!window.confirm("备份将包含加密的授权服务身份。请将备份文件和密码分开保管，是否继续？")) return
-        await localDownload("/admin/backups", "小云雀管理资料.snailbackup", {
-          password,
-          includeIdentity: true,
-          confirmIdentity: true,
-        })
-        setNotice("备份文件已生成")
+      if (mode === "backup" || mode === "bundle-export") {
+        if (password !== confirm) throw new Error("两次密码输入不一致")
+        if (mode === "backup") {
+          if (!window.confirm("备份将包含加密的授权服务身份。请将备份文件和密码分开保管，是否继续？")) return
+          await localDownload("/admin/backups", "小云雀管理资料.snailbackup", {
+            password,
+            includeIdentity: true,
+            confirmIdentity: true,
+          })
+          setNotice("备份文件已生成")
+        } else {
+          await localDownload("/admin/business-bundle/export", "小云雀管理数据.snailbundle", { password })
+          setNotice("加密移交包已生成")
+        }
         reset()
         return
       }
@@ -197,7 +202,7 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
           await localFileRequest<Preview>(
             mode === "bundle" ? "/admin/business-bundle/preview" : "/admin/backups/preview",
             file,
-            mode === "restore" ? password : undefined,
+            mode === "restore" || mode === "bundle" ? password : undefined,
           ),
         )
         setPassword("")
@@ -233,12 +238,10 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
         <Button
           variant="outline"
           disabled={busy}
-          onClick={() =>
-            void perform(async () => {
-              await localDownload("/admin/business-bundle/export", "蜗牛管理数据.snailbundle", {})
-              setNotice("管理数据包已生成")
-            })
-          }
+          onClick={() => {
+            setNotice("")
+            setMode("bundle-export")
+          }}
         >
           导出管理数据
         </Button>
@@ -284,12 +287,18 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
         >
           <DialogHeader>
             <DialogTitle>
-              {mode === "backup" ? "备份资料" : mode === "bundle" ? "导入管理数据" : "恢复备份"}
+              {mode === "backup"
+                ? "备份资料"
+                : mode === "bundle-export"
+                  ? "导出管理数据"
+                  : mode === "bundle"
+                    ? "导入管理数据"
+                    : "恢复备份"}
             </DialogTitle>
           </DialogHeader>
           <DialogBody>
             <form className="grid gap-5" onSubmit={submit}>
-              {mode !== "backup" && !preview && (
+              {mode !== "backup" && mode !== "bundle-export" && !preview && (
                 <div className="grid gap-2">
                   <Label htmlFor="management-file">{mode === "bundle" ? "管理数据包" : "加密备份文件"}</Label>
                   <Input
@@ -302,29 +311,37 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
                   />
                 </div>
               )}
-              {(mode === "backup" || (mode === "restore" && !preview)) && (
+              {(mode === "backup" ||
+                mode === "bundle-export" ||
+                ((mode === "restore" || mode === "bundle") && !preview)) && (
                 <div className="grid gap-2">
-                  <Label htmlFor="backup-password">备份密码</Label>
+                  <Label htmlFor="backup-password">
+                    {mode === "bundle" || mode === "bundle-export" ? "移交包密码" : "备份密码"}
+                  </Label>
                   <Input
                     id="backup-password"
                     type="password"
                     value={password}
                     autoComplete="off"
                     disabled={busy}
+                    minLength={10}
+                    maxLength={128}
                     required
                     onChange={(e) => setPassword(e.target.value)}
                   />
                 </div>
               )}
-              {mode === "backup" && (
+              {(mode === "backup" || mode === "bundle-export") && (
                 <div className="grid gap-2">
-                  <Label htmlFor="backup-confirm">确认备份密码</Label>
+                  <Label htmlFor="backup-confirm">确认密码</Label>
                   <Input
                     id="backup-confirm"
                     type="password"
                     value={confirm}
                     autoComplete="off"
                     disabled={busy}
+                    minLength={10}
+                    maxLength={128}
                     required
                     onChange={(e) => setConfirm(e.target.value)}
                   />
@@ -413,11 +430,13 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
                     ? "正在处理…"
                     : mode === "backup"
                       ? "生成备份"
-                      : !preview
-                        ? "验证并预览"
-                        : mode === "bundle"
-                          ? "确认导入管理数据"
-                          : "确认恢复并重新登录"}
+                      : mode === "bundle-export"
+                        ? "生成加密移交包"
+                        : !preview
+                          ? "验证并预览"
+                          : mode === "bundle"
+                            ? "确认导入管理数据"
+                            : "确认恢复并重新登录"}
                 </Button>
               </div>
             </form>

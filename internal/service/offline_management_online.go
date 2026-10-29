@@ -103,9 +103,9 @@ func (s *OfflineIssuanceService) renewDevices(ctx context.Context, actor string,
 		}
 		var endDate *time.Time
 		if command.Term.Kind == "date" {
-			parsed, parseErr := time.ParseInLocation("2006-01-02", command.Term.EndDate, time.FixedZone("Asia/Shanghai", 8*3600))
-			if parseErr != nil {
-				return parseErr
+			parsed, parseErr := time.Parse("2006-01-02", command.Term.EndDate)
+			if parseErr != nil || parsed.Format("2006-01-02") != command.Term.EndDate {
+				return offlineFailure("BAD_REQUEST", "请选择有效的截止日期")
 			}
 			endDate = &parsed
 		}

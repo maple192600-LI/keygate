@@ -20,6 +20,7 @@ process.stderr.write('MANAGER_STAGE profile-set\n');
 
 const sessionFile = path.join(dataRoot, 'runtime-session.json');
 let window, runtime, starting = false, closing = false, shutdownComplete = false;
+let windowRequested = !startupMode;
 const primary = serviceHostMode || app.requestSingleInstanceLock();
 process.stderr.write(`MANAGER_STAGE instance-lock ${primary}\n`);
 if (!primary) app.quit();
@@ -160,6 +161,7 @@ app.on('second-instance', (_event, argv) => {
     return;
   }
   if (argv.includes('--startup')) return;
+  windowRequested = true;
   if (window) { if (window.isMinimized()) window.restore(); window.focus(); }
 });
 
@@ -203,7 +205,7 @@ const startup = app.whenReady().then(async () => {
     return;
   }
   const session = await ensureServiceHost();
-  if (startupMode) { app.quit(); return; }
+  if (startupMode && !windowRequested) { app.quit(); return; }
   createWindow(session);
 }).finally(() => { starting = false; }).catch(error => {
   process.stderr.write(`MANAGER_START_FAILED ${error.name} ${error.code || 'none'} ${error.cause?.code || 'none'}\n`);

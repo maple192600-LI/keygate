@@ -177,9 +177,62 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	if status != 200 {
 		t.Fatalf("online code issue %d %s", status, body)
 	}
+	issued := decodeLocal[service.OfflineIssueResult](t, body)
+	if issued.LicenseID == "" || issued.LicenseCode == "" || issued.Revision != 0 {
+		t.Fatalf("online code was not preserved unactivated: %+v", issued)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/issuance-operations/"+onlineCommand.OperationID, nil)
+	if status != 200 {
+		t.Fatalf("recover lost create response from operation history %d %s", status, body)
+	}
 	onlineLicense := decodeLocal[service.OfflineIssueResult](t, body)
-	if onlineLicense.LicenseID == "" || onlineLicense.LicenseCode == "" || onlineLicense.Revision != 0 {
-		t.Fatalf("online code was not preserved unactivated: %+v", onlineLicense)
+	var operationEnvelope struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err = json.Unmarshal(body, &operationEnvelope); err != nil {
+		t.Fatal("decode create operation response", err)
+	}
+	if onlineLicense.LicenseID != issued.LicenseID || onlineLicense.CustomerNumber != issued.CustomerNumber || onlineLicense.LicenseNumber != issued.LicenseNumber || onlineLicense.DisplayNumber != issued.DisplayNumber || onlineLicense.DeviceLimit != issued.DeviceLimit || onlineLicense.Revision != 0 || !onlineLicense.Replayed {
+		t.Fatalf("operation query did not return the original create result: issued=%+v recovered=%+v", issued, onlineLicense)
+	}
+	if _, leaked := operationEnvelope.Data["licenseCode"]; leaked || onlineLicense.LicenseCode != "" {
+		t.Fatal("operation history exposed a plaintext activation code")
+	}
+	status, body, headers := a.callHeaders(t, "GET", "/api/v1/admin/offline-licenses/"+onlineLicense.LicenseID+"/code", nil)
+	if status != 200 || !strings.Contains(strings.ToLower(headers.Get("Cache-Control")), "no-store") {
+		t.Fatalf("owner activation code retrieval status/cache policy %d %v %s", status, headers, body)
+	}
+	retrievedCode := decodeLocal[struct {
+		LicenseCode string `json:"licenseCode"`
+	}](t, body)
+	if retrievedCode.LicenseCode != issued.LicenseCode {
+		t.Fatal("owner code endpoint did not recover the original created code")
+	}
+	onlineLicense.LicenseCode = retrievedCode.LicenseCode
+	const businessPassword = "Synthetic-business-package-password"
+	status, businessArchive, businessHeaders := a.callHeaders(t, "POST", "/api/v1/admin/business-bundle/export", map[string]string{"password": businessPassword})
+	if status != 200 || !strings.HasPrefix(businessHeaders.Get("Content-Type"), "application/octet-stream") || !strings.Contains(strings.ToLower(businessHeaders.Get("Cache-Control")), "no-store") {
+		t.Fatalf("owner business export response status/content-cache policy %d %v", status, businessHeaders)
+	}
+	if bytes.Contains(businessArchive, []byte(onlineLicense.LicenseCode)) {
+		t.Fatal("business export response exposed the activation code without decryption")
+	}
+	businessPlain, err := offline.OpenBackup(businessArchive, businessPassword)
+	if err != nil {
+		t.Fatal("open sealed business export", err)
+	}
+	var businessPackage struct {
+		FormatVersion int               `json:"formatVersion"`
+		Kind          string            `json:"kind"`
+		LicenseCodes  map[string]string `json:"licenseCodes"`
+	}
+	if err = json.Unmarshal(businessPlain, &businessPackage); err != nil {
+		clear(businessPlain)
+		t.Fatal("decode sealed business payload", err)
+	}
+	clear(businessPlain)
+	if businessPackage.FormatVersion != 1 || businessPackage.Kind != "snail-commercial-transfer" || businessPackage.LicenseCodes[onlineLicense.LicenseID] != onlineLicense.LicenseCode {
+		t.Fatal("sealed business export omitted the original online activation code")
 	}
 	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses/"+onlineLicense.LicenseID, nil)
 	if status != 200 {

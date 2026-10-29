@@ -51,6 +51,18 @@ type OfflineBackupService struct {
 	EncryptionSecret string
 }
 
+type BusinessTransfer struct {
+	Bundle       *store.BusinessBundle
+	LicenseCodes map[string]string
+}
+
+type sealedBusinessTransfer struct {
+	FormatVersion int                   `json:"formatVersion"`
+	Kind          string                `json:"kind"`
+	Bundle        *store.BusinessBundle `json:"bundle"`
+	LicenseCodes  map[string]string     `json:"licenseCodes"`
+}
+
 func backupFailure(message string) error {
 	return &offline.Error{Code: "BACKUP_INVALID", Message: message + "；当前资料保留"}
 }
@@ -62,12 +74,58 @@ func (s *OfflineBackupService) PublicIdentity(ctx context.Context) (offline.Publ
 	}
 	return s.Store.ExpectedSigningIdentity(ctx, p)
 }
-func (s *OfflineBackupService) ExportBusiness(ctx context.Context) ([]byte, error) {
+func (s *OfflineBackupService) ExportBusiness(ctx context.Context, actor, password string) ([]byte, error) {
 	p, err := s.PublicIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.Store.ExportBusinessBundle(ctx, p)
+	bundleRaw, err := s.Store.ExportBusinessBundle(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	bundle, err := store.ParseBusinessBundle(bundleRaw)
+	if err != nil {
+		return nil, err
+	}
+	codes := make(map[string]string, len(bundle.Tables["licenses"]))
+	for _, row := range bundle.Tables["licenses"] {
+		var id string
+		if err = json.Unmarshal(row["id"], &id); err != nil || id == "" {
+			return nil, backupFailure("授权编号无效")
+		}
+		code, codeErr := s.Store.OfflineLicenseCode(ctx, actor, id)
+		if codeErr != nil {
+			return nil, codeErr
+		}
+		codes[id] = code
+	}
+	plain, err := json.Marshal(sealedBusinessTransfer{FormatVersion: 1, Kind: "snail-commercial-transfer", Bundle: bundle, LicenseCodes: codes})
+	if err != nil {
+		return nil, err
+	}
+	defer clear(plain)
+	return offline.SealBackup(plain, password)
+}
+
+func (s *OfflineBackupService) OpenBusiness(raw []byte, password string) (*BusinessTransfer, error) {
+	plain, err := offline.OpenBackup(raw, password)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(plain)
+	if _, err = offline.StrictJSON(plain, offline.BackupLimit); err != nil {
+		return nil, err
+	}
+	var payload sealedBusinessTransfer
+	decoder := json.NewDecoder(bytes.NewReader(plain))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&payload); err != nil || payload.FormatVersion != 1 || payload.Kind != "snail-commercial-transfer" || payload.Bundle == nil || payload.LicenseCodes == nil {
+		return nil, backupFailure("业务移交包无效")
+	}
+	if err = store.ValidateBusinessBundle(payload.Bundle); err != nil {
+		return nil, err
+	}
+	return &BusinessTransfer{Bundle: payload.Bundle, LicenseCodes: payload.LicenseCodes}, nil
 }
 func (s *OfflineBackupService) Backup(ctx context.Context, password string, includeIdentity, confirmed bool) ([]byte, error) {
 	if includeIdentity && !confirmed {

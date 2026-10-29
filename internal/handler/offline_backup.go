@@ -17,9 +17,10 @@ import (
 )
 
 type bundlePreview struct {
-	bundle *store.BusinessBundle
-	owner  string
-	expiry time.Time
+	bundle       *store.BusinessBundle
+	licenseCodes map[string]string
+	owner        string
+	expiry       time.Time
 }
 type restorePreview struct {
 	candidate *service.RestoreCandidate
@@ -61,13 +62,20 @@ func (h *OfflineBackupHandler) Close(ctx context.Context) error {
 	return nil
 }
 func (h *OfflineBackupHandler) ExportBusiness(c *gin.Context) {
-	raw, err := h.Service.ExportBusiness(c)
+	var input struct {
+		Password string `json:"password"`
+	}
+	if !LocalJSON(c, &input) {
+		return
+	}
+	raw, err := h.Service.ExportBusiness(c, c.GetString("user_id"), input.Password)
 	if err != nil {
 		localOfflineError(c, err)
 		return
 	}
+	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Disposition", `attachment; filename="snail-management.snailbundle"`)
-	c.Data(200, "application/json", raw)
+	c.Data(200, "application/octet-stream", raw)
 }
 func uploadArchive(c *gin.Context) ([]byte, bool) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, offline.BackupLimit+1024*1024)
@@ -134,11 +142,12 @@ func (h *OfflineBackupHandler) PreviewBusiness(c *gin.Context) {
 	if !ok {
 		return
 	}
-	bundle, err := store.ParseBusinessBundle(raw)
+	transfer, err := h.Service.OpenBusiness(raw, c.GetString("backup_password"))
 	if err != nil {
 		localOfflineError(c, err)
 		return
 	}
+	bundle := transfer.Bundle
 	public, err := h.Service.PublicIdentity(c)
 	if err != nil {
 		localOfflineError(c, err)
@@ -148,7 +157,7 @@ func (h *OfflineBackupHandler) PreviewBusiness(c *gin.Context) {
 		response.Err(c, 409, "SIGNING_IDENTITY_MISMATCH", "数据包与本机签发身份不一致")
 		return
 	}
-	summary, err := h.Service.Store.ImportBusinessBundle(c, bundle, c.GetString("user_id"), false)
+	summary, err := h.Service.Store.ImportBusinessBundle(c, bundle, transfer.LicenseCodes, c.GetString("user_id"), false)
 	if err != nil {
 		localOfflineError(c, err)
 		return
@@ -157,7 +166,7 @@ func (h *OfflineBackupHandler) PreviewBusiness(c *gin.Context) {
 		h.bundles = map[string]bundlePreview{}
 	}
 	id := store.NewID()
-	h.bundles[id] = bundlePreview{bundle, c.GetString("user_id"), time.Now().Add(10 * time.Minute)}
+	h.bundles[id] = bundlePreview{bundle, transfer.LicenseCodes, c.GetString("user_id"), time.Now().Add(10 * time.Minute)}
 	response.OK(c, gin.H{"previewId": id, "summary": summary})
 }
 func (h *OfflineBackupHandler) ConfirmBusiness(c *gin.Context) {
@@ -182,7 +191,7 @@ func (h *OfflineBackupHandler) ConfirmBusiness(c *gin.Context) {
 		response.Err(c, 409, "SIGNING_IDENTITY_MISMATCH", "本机签发身份已变化，请重新预览")
 		return
 	}
-	summary, err := h.Service.Store.ImportBusinessBundle(c, p.bundle, c.GetString("user_id"), true)
+	summary, err := h.Service.Store.ImportBusinessBundle(c, p.bundle, p.licenseCodes, c.GetString("user_id"), true)
 	if err != nil {
 		localOfflineError(c, err)
 		return

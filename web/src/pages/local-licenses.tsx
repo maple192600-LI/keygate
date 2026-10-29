@@ -45,6 +45,7 @@ type Device = {
   lastReportedAt: string | null
 }
 const terms = { unactivated: "未激活", not_yet_valid: "待生效", valid: "使用中", expired: "已到期", perpetual: "永久" }
+const licenseNumber = (id: string) => `L-${id.replaceAll("-", "").toUpperCase()}`
 const termText = (term: NonNullable<OfflineLicense["term"]>) => {
   if (term.kind === "perpetual") return "永久"
   if (term.kind === "date") return `有效至 ${term.endDate}`
@@ -204,7 +205,7 @@ export default function LocalLicenses({
                   <TableCell>
                     <span className="lc-license-customer">{row.customerName}</span>
                     <span className="lc-record-number">{row.customerNumber}</span>
-                    <span className="lc-record-number">{row.licenseNumber || row.displayNumber}</span>
+                    <span className="lc-record-number">{licenseNumber(row.id)}</span>
                   </TableCell>
                   {!compact && (
                     <TableCell>
@@ -385,7 +386,7 @@ function LicenseDetails({
                 <dt>客户编号</dt>
                 <dd>{row.customerNumber}</dd>
                 <dt>授权编号</dt>
-                <dd>{row.licenseNumber || row.displayNumber}</dd>
+                <dd>{licenseNumber(row.id)}</dd>
                 <dt>期限状态</dt>
                 <dd>{terms[row.termState]}</dd>
                 <dt>授权期限</dt>

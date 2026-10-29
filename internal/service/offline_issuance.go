@@ -379,6 +379,54 @@ func IssuanceResult(row *model.LicenseIssuance, replayed bool) OfflineIssueResul
 	return result
 }
 
+func (s *OfflineIssuanceService) Operation(ctx context.Context, operationID string) (OfflineIssueResult, error) {
+	row, err := s.Store.IssuanceOperation(ctx, operationID)
+	if err == nil {
+		return IssuanceResult(row, true), nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return OfflineIssueResult{}, err
+	}
+	kind, raw, err := s.Store.OfflineManagementOperation(ctx, operationID)
+	if err != nil {
+		return OfflineIssueResult{}, err
+	}
+	if kind != "issue-license" && kind != "renew-license" && kind != "release-device-binding" {
+		return OfflineIssueResult{}, sql.ErrNoRows
+	}
+	var result OfflineIssueResult
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return OfflineIssueResult{}, err
+	}
+	if result.LicenseID == "" {
+		return OfflineIssueResult{}, errors.New("stored license operation result has no license id")
+	}
+	result.LicenseCode = ""
+	if kind == "issue-license" {
+		result.Revision = 0
+		if result.CustomerNumber == "" || result.LicenseNumber == "" || result.DisplayNumber == "" || result.DeviceLimit == 0 {
+			view, viewErr := s.Store.OfflineLicense(ctx, result.LicenseID)
+			if viewErr != nil {
+				return OfflineIssueResult{}, viewErr
+			}
+			if result.CustomerNumber == "" {
+				result.CustomerNumber = view.CustomerNumber
+			}
+			if result.LicenseNumber == "" {
+				result.LicenseNumber = view.LicenseNumber
+			}
+			if result.DisplayNumber == "" {
+				result.DisplayNumber = view.DisplayNumber
+			}
+			if result.DeviceLimit == 0 {
+				result.DeviceLimit = view.DeviceLimit
+			}
+		}
+	}
+	result.Replayed = true
+	return result, nil
+}
+
 func (s *OfflineIssuanceService) CreateLicense(ctx context.Context, actor string, command OfflineIssueCommand) (OfflineIssueResult, error) {
 	intent, err := cleanIntent(command.OfflineIntent)
 	if err != nil {
@@ -422,7 +470,7 @@ func (s *OfflineIssuanceService) CreateLicense(ctx context.Context, actor string
 			if err = tx.NewSelect().Model(licenseRow).Where("id=? AND fulfillment_mode='offline_file'", saved.LicenseID).Scan(ctx); err != nil {
 				return err
 			}
-			result = OfflineIssueResult{LicenseID: licenseRow.ID, LicenseCode: s.Store.DecryptLicenseKey(licenseRow), DisplayNumber: licenseRow.DisplayNumber, DeviceLimit: licenseRow.DeviceLimit, Replayed: true}
+			result = OfflineIssueResult{LicenseID: licenseRow.ID, LicenseCode: s.Store.DecryptLicenseKey(licenseRow), CustomerNumber: "C-" + strings.ToUpper(strings.ReplaceAll(licenseRow.CustomerID, "-", "")), LicenseNumber: "L-" + strings.ToUpper(strings.ReplaceAll(licenseRow.ID, "-", "")), DisplayNumber: licenseRow.DisplayNumber, DeviceLimit: licenseRow.DeviceLimit, Replayed: true}
 			return nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -460,8 +508,8 @@ func (s *OfflineIssuanceService) CreateLicense(ctx context.Context, actor string
 		}
 		licenseRow := &model.License{ID: store.NewID(), ProductID: productID, PlanID: planID, CustomerID: data.customer.ID, FulfillmentMode: "offline_file", IssuanceEnabled: true, DeviceLimit: intent.DeviceLimit, LicenseKey: license.GenerateKey("KG"), DisplayNumber: fmt.Sprintf("SN-%s-%04d", base.In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("200601"), number), Status: "active", ValidFrom: start, TermKind: intent.Term.Kind, TermAmount: intent.Term.Amount, TermStartsAt: scheduled}
 		if intent.Term.Kind == "date" {
-			date, parseErr := time.ParseInLocation("2006-01-02", intent.Term.EndDate, time.FixedZone("Asia/Shanghai", 8*3600))
-			if parseErr != nil {
+			date, parseErr := time.Parse("2006-01-02", intent.Term.EndDate)
+			if parseErr != nil || date.Format("2006-01-02") != intent.Term.EndDate {
 				return offlineFailure("BAD_REQUEST", "请选择有效的截止日期")
 			}
 			licenseRow.TermEndDate = &date
@@ -470,7 +518,9 @@ func (s *OfflineIssuanceService) CreateLicense(ctx context.Context, actor string
 			return err
 		}
 		result = OfflineIssueResult{LicenseID: licenseRow.ID, LicenseCode: licenseRow.LicenseKey, CustomerNumber: "C-" + strings.ToUpper(strings.ReplaceAll(data.customer.ID, "-", "")), LicenseNumber: "L-" + strings.ToUpper(strings.ReplaceAll(licenseRow.ID, "-", "")), DisplayNumber: licenseRow.DisplayNumber, DeviceLimit: licenseRow.DeviceLimit}
-		saved, _ := json.Marshal(map[string]string{"licenseId": licenseRow.ID, "displayNumber": licenseRow.DisplayNumber})
+		savedResult := result
+		savedResult.LicenseCode = ""
+		saved, _ := json.Marshal(savedResult)
 		if _, err = tx.NewRaw("INSERT INTO offline_management_operations(operation_id,operation_hash,kind,result,created_by) VALUES(?,?,?,?,?)", command.OperationID, operationHash, "issue-license", string(saved), actor).Exec(ctx); err != nil {
 			return err
 		}

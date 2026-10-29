@@ -127,6 +127,81 @@ func TestOfflineRenewalAdvancesOriginalLicense(t *testing.T) {
 	}
 }
 
+func TestOfflineRenewalStoresSpecifiedEndDateAsCalendarDay(t *testing.T) {
+	s, actor, intent, _ := offlineServiceFixture(t)
+	ctx := context.Background()
+	first, err := s.Issue(ctx, actor, prepareOfflineCommand(t, s, intent))
+	if err != nil {
+		t.Fatal("create source license", err)
+	}
+	endDate := "2026-11-30"
+	renewal := OfflineIntent{Action: "renew", LicenseID: first.LicenseID, ExpectedRevision: first.Revision, Term: offline.Term{Kind: "date", EndDate: endDate}}
+	renewed, err := s.Issue(ctx, actor, prepareOfflineCommand(t, s, renewal))
+	if err != nil {
+		t.Fatal("renew through specified date", err)
+	}
+	if renewed.ExpiresAt == nil {
+		t.Fatal("renewal deadline is missing")
+	}
+	if *renewed.ExpiresAt != "2026-11-30T16:00:00.000Z" {
+		t.Fatalf("renewal deadline does not include the full Beijing end date: got %s", *renewed.ExpiresAt)
+	}
+	var storedDate, deadline string
+	if err = s.Store.DB.NewRaw(`SELECT to_char(term_end_date,'YYYY-MM-DD'),to_char(valid_until AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM licenses WHERE id=?`, first.LicenseID).Scan(ctx, &storedDate, &deadline); err != nil {
+		t.Fatal("read renewed date and deadline", err)
+	}
+	if storedDate != endDate || deadline != "2026-11-30T16:00:00.000Z" {
+		t.Fatalf("stored DATE/deadline differ from selected Beijing date: date=%s deadline=%s", storedDate, deadline)
+	}
+	view, err := s.Store.OfflineLicense(ctx, first.LicenseID)
+	if err != nil || view.Term.EndDate == nil || *view.Term.EndDate != endDate || view.ExpiresAt == nil || view.ExpiresAt.UTC().Format("2006-01-02T15:04:05.000Z") != deadline {
+		t.Fatalf("public license view differs from the selected end date: view=%+v err=%v", view, err)
+	}
+}
+
+func TestOfflineCreateStoresSpecifiedEndDateAsCalendarDayAndActivationDeadline(t *testing.T) {
+	s, actor, intent, base := offlineServiceFixture(t)
+	ctx := context.Background()
+	endDate := "2026-11-30"
+	createdIntent := OfflineIntent{
+		Action: "initial", CustomerID: intent.CustomerID, DeviceLimit: 1,
+		Term: offline.Term{Kind: "date", EndDate: endDate},
+	}
+	created, err := s.Issue(ctx, actor, prepareOfflineCommand(t, s, createdIntent))
+	if err != nil {
+		t.Fatal("create date-bound license", err)
+	}
+	var storedDate string
+	if err = s.Store.DB.NewRaw("SELECT to_char(term_end_date,'YYYY-MM-DD') FROM licenses WHERE id=?", created.LicenseID).Scan(ctx, &storedDate); err != nil {
+		t.Fatal("read created DATE", err)
+	}
+	view, err := s.Store.OfflineLicense(ctx, created.LicenseID)
+	if err != nil || storedDate != endDate || view.Term.EndDate == nil || *view.Term.EndDate != endDate {
+		t.Fatalf("created DATE did not reopen as the selected calendar day: stored=%s view=%+v err=%v", storedDate, view, err)
+	}
+	identity, err := s.Keys.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := offline.ParsePublic([]byte(identity.PublicKeyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &ClientActivationService{Store: s.Store, Keys: s.Keys, clock: func() time.Time { return base }}
+	activated, err := client.Activate(ctx, ClientActivationCommand{
+		OperationID: store.NewID(), LicenseCode: created.LicenseCode, ProductID: offline.ProductID,
+		Device:      offline.Device{Type: offline.MachineType, Digest: strings.Repeat("c", 64)},
+		DeviceLabel: "合成指定期限设备", AppVersion: "test", BuildID: "date-test",
+	})
+	if err != nil {
+		t.Fatal("activate created license", err)
+	}
+	payload, err := offline.Verify([]byte(activated.RawLicense), map[string]ed25519.PublicKey{identity.KeyID: public}, offline.ProductID)
+	if err != nil || payload.ExpiresAt == nil || *payload.ExpiresAt != "2026-11-30T16:00:00.000Z" {
+		t.Fatalf("signed deadline must be midnight Beijing after the selected end date: payload=%+v err=%v", payload, err)
+	}
+}
+
 func countOfflineRows(t *testing.T, s *store.Store, table string) int {
 	t.Helper()
 	var count int
@@ -347,6 +422,13 @@ func TestClientSyncReturnsSignedTransferAndReplacementActivationKeepsTerm(t *tes
 			if err != nil || secondPayload.Revision != 2 || secondPayload.BindingState != "active" || firstPayload.NotBefore != secondPayload.NotBefore || (firstPayload.ExpiresAt == nil) != (secondPayload.ExpiresAt == nil) || (firstPayload.ExpiresAt != nil && *firstPayload.ExpiresAt != *secondPayload.ExpiresAt) {
 				t.Fatal("second activation changed signed term", secondPayload, err)
 			}
+			activeBundle, err := s.Store.ExportBusinessBundle(ctx, identity)
+			if err != nil {
+				t.Fatal("export active multi-device license", err)
+			}
+			if _, err = store.ParseBusinessBundle(activeBundle); err != nil {
+				t.Fatal("parse active multi-device license", err)
+			}
 			if initialTerm.Kind == "days" {
 				renewal := OfflineIntent{Action: "renew", LicenseID: created.LicenseID, ExpectedRevision: 2, Term: offline.Term{Kind: "days", Amount: 7}}
 				renewCommand := prepareOfflineCommand(t, s, renewal)
@@ -434,6 +516,76 @@ func TestClientSyncReturnsSignedTransferAndReplacementActivationKeepsTerm(t *tes
 			var activeCount int
 			if err = s.Store.DB.NewRaw("SELECT count(*) FROM offline_device_bindings WHERE license_id=? AND superseded_at IS NULL", created.LicenseID).Scan(ctx, &activeCount); err != nil || activeCount != 2 {
 				t.Fatal("device-limit rejection changed active bindings", activeCount, err)
+			}
+			var currentRevision int64
+			if err = s.Store.DB.NewRaw("SELECT current_revision FROM licenses WHERE id=?", created.LicenseID).Scan(ctx, &currentRevision); err != nil {
+				t.Fatal("read final activation revision", err)
+			}
+			for _, bindingID := range []string{secondDevice.BindingID, replacement.BindingID} {
+				transfer := OfflineIntent{Action: "transfer", LicenseID: created.LicenseID, BindingID: bindingID, ExpectedRevision: currentRevision, Reason: "合成释放最后设备"}
+				moved, moveErr := s.Issue(ctx, actor, prepareOfflineCommand(t, s, transfer))
+				if moveErr != nil {
+					t.Fatal("release remaining device", moveErr)
+				}
+				currentRevision = moved.Revision
+			}
+			if err = s.Store.DB.NewRaw("SELECT count(*) FROM offline_device_bindings WHERE license_id=? AND superseded_at IS NULL", created.LicenseID).Scan(ctx, &activeCount); err != nil || activeCount != 0 {
+				t.Fatal("all bindings were not released", activeCount, err)
+			}
+			bundleRaw, err := s.Store.ExportBusinessBundle(ctx, identity)
+			if err != nil {
+				t.Fatal("export fully transferred multi-device license", err)
+			}
+			bundle, err := store.ParseBusinessBundle(bundleRaw)
+			if err != nil {
+				t.Fatal("parse fully transferred multi-device license", err)
+			}
+			codes := licenseCodesForBundle(t, ctx, s.Store, actor, bundle)
+			target, _, targetActor := blankBackupTarget(t)
+			if _, err = target.ImportBusinessBundle(ctx, bundle, codes, targetActor, true); err != nil {
+				t.Fatal("import fully transferred multi-device license", err)
+			}
+			var targetRevision, targetBindings, targetIssuances, sourceIssuances int64
+			if err = target.DB.NewRaw("SELECT current_revision FROM licenses WHERE id=?", created.LicenseID).Scan(ctx, &targetRevision); err != nil {
+				t.Fatal("read transferred target revision", err)
+			}
+			if err = target.DB.NewRaw("SELECT count(*) FROM offline_device_bindings WHERE license_id=? AND superseded_at IS NULL", created.LicenseID).Scan(ctx, &targetBindings); err != nil {
+				t.Fatal("read transferred target bindings", err)
+			}
+			if err = target.DB.NewRaw("SELECT count(*) FROM license_issuances WHERE license_id=?", created.LicenseID).Scan(ctx, &targetIssuances); err != nil {
+				t.Fatal("read transferred target history", err)
+			}
+			if err = s.Store.DB.NewRaw("SELECT count(*) FROM license_issuances WHERE license_id=?", created.LicenseID).Scan(ctx, &sourceIssuances); err != nil {
+				t.Fatal("read transferred source history", err)
+			}
+			if targetRevision != currentRevision || targetBindings != 0 || targetIssuances != sourceIssuances {
+				t.Fatalf("bundle did not preserve all transferred state: revision=%d bindings=%d issuances=%d", targetRevision, targetBindings, targetIssuances)
+			}
+			var databaseURL string
+			dsn, parseErr := url.Parse(os.Getenv("SNAIL_LOCAL_TEST_DSN"))
+			if parseErr != nil {
+				t.Fatal("parse isolated database URL", parseErr)
+			}
+			if err = s.Store.DB.NewRaw("SELECT current_database()").Scan(ctx, &databaseURL); err != nil {
+				t.Fatal("read source database name", err)
+			}
+			dsn.Path = "/" + databaseURL
+			backup := &OfflineBackupService{Store: s.Store, Keys: s.Keys, DatabaseURL: dsn.String(), DataDir: t.TempDir(), MigrationDir: "../../db/migrations", EncryptionSecret: strings.Repeat("07", 32)}
+			fullBackup, err := backup.Backup(ctx, "Synthetic-multi-device-backup", true, true)
+			if err != nil {
+				t.Fatal("backup fully transferred multi-device license", err)
+			}
+			candidate, err := backup.PreviewRestore(ctx, fullBackup, "Synthetic-multi-device-backup")
+			if err != nil {
+				t.Fatal("preview fully transferred multi-device restore", err)
+			}
+			defer func() {
+				if err := backup.DiscardRestore(ctx, candidate); err != nil {
+					t.Error(err)
+				}
+			}()
+			if err = backup.ValidateRestoreContinuity(ctx, candidate, ""); err != nil {
+				t.Fatal("validate fully transferred multi-device restore", err)
 			}
 			if outputDir := os.Getenv("KEYGATE_TRANSFER_FIXTURE_DIR"); outputDir != "" && initialTerm.Kind == "days" {
 				if err = os.MkdirAll(outputDir, 0700); err != nil {

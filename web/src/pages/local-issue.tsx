@@ -33,6 +33,7 @@ type Preview = {
 }
 type Issued = {
   licenseId: string
+  licenseNumber?: string
   licenseCode?: string
   displayNumber: string
   revision: number
@@ -57,6 +58,7 @@ const durationText = (kind: Term["kind"], amount: string) =>
     : kind === "date"
       ? `有效至 ${amount}`
       : `首次成功激活后 ${amount}${{ days: "天", months: "个月", years: "年" }[kind]}`
+const licenseNumber = (id: string) => `L-${id.replaceAll("-", "").toUpperCase()}`
 const failed = (cause: unknown) => (cause instanceof Error ? cause.message : "操作失败，请重试")
 
 export default function LocalIssue({
@@ -144,7 +146,11 @@ export default function LocalIssue({
         action === "initial" ? "/admin/offline-licenses" : `/admin/offline-licenses/${existing!.id}/${action}`
       try {
         const issued = await localRequest<Issued>(path, attempt.current)
-        setResult({ ...issued, activationAnchor: issued.activationAnchor ?? prepared.preview.activationAnchor })
+        setResult({
+          ...issued,
+          licenseNumber: licenseNumber(issued.licenseId),
+          activationAnchor: issued.activationAnchor ?? prepared.preview.activationAnchor,
+        })
         setUncertain(false)
       } catch (cause) {
         setUncertain(
@@ -160,7 +166,15 @@ export default function LocalIssue({
     await perform(async () => {
       try {
         const value = await localRequest<Issued>(`/admin/issuance-operations/${attempt.current!.operationId}`)
-        setResult({ ...value, activationAnchor: value.activationAnchor ?? prepared?.preview.activationAnchor })
+        const licenseCode =
+          value.licenseCode ??
+          (await localRequest<{ licenseCode: string }>(`/admin/offline-licenses/${value.licenseId}/code`)).licenseCode
+        setResult({
+          ...value,
+          licenseNumber: licenseNumber(value.licenseId),
+          licenseCode,
+          activationAnchor: value.activationAnchor ?? prepared?.preview.activationAnchor,
+        })
         setUncertain(false)
       } catch (cause) {
         if (cause instanceof LocalAPIError && cause.status === 404) {
@@ -219,7 +233,7 @@ export default function LocalIssue({
             <div className="grid gap-5">
               <dl className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
                 <dt>授权编号</dt>
-                <dd>{result.displayNumber}</dd>
+                <dd>{licenseNumber(result.licenseId)}</dd>
                 {result.licenseCode && (
                   <>
                     <dt>授权码</dt>
@@ -254,7 +268,7 @@ export default function LocalIssue({
                 <dt>客户</dt>
                 <dd>{prepared.preview.customerName || customer.displayName}</dd>
                 <dt>授权编号</dt>
-                <dd>{prepared.preview.displayNumber || "新授权"}</dd>
+                <dd>{existing ? licenseNumber(existing.id) : "签发后生成"}</dd>
                 {action === "initial" && (
                   <>
                     <dt>设备数量</dt>

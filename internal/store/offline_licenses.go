@@ -25,6 +25,16 @@ func (s *Store) IssuanceOperation(ctx context.Context, id string) (*model.Licens
 	err := s.DB.NewSelect().Model(result).Where("operation_id = ?", id).Scan(ctx)
 	return result, err
 }
+
+func (s *Store) OfflineManagementOperation(ctx context.Context, id string) (string, []byte, error) {
+	var row struct {
+		Kind   string
+		Result string
+	}
+	err := s.DB.NewRaw("SELECT kind,result::text AS result FROM offline_management_operations WHERE operation_id=?", id).Scan(ctx, &row)
+	return row.Kind, []byte(row.Result), err
+}
+
 func (s *Store) LicenseIssuance(ctx context.Context, id string) (*model.LicenseIssuance, error) {
 	result := new(model.LicenseIssuance)
 	err := s.DB.NewSelect().Model(result).Where("id = ?", id).Scan(ctx)
