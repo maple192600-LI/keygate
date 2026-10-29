@@ -51,6 +51,7 @@ export default function LocalOfflineApp() {
   const [reload, setReload] = useState(0)
   const [workflow, setWorkflow] = useState<WorkspaceWorkflow | null>(null)
   const [issueNavigationLocked, setIssueNavigationLocked] = useState(false)
+  const [logoutBusy, setLogoutBusy] = useState(false)
   const [page, setPage] = useState<"overview" | "customers" | "licenses" | "delivery" | "expiring" | "settings">(
     "customers",
   )
@@ -178,7 +179,7 @@ export default function LocalOfflineApp() {
         />
       )}
       {mode === "ready" && owner && (
-        <div className="lc-shell">
+        <div className="lc-shell" inert={logoutBusy}>
           <aside className="lc-sidebar">
             <div className="lc-brand">
               <img src="/xiaoyunque-icon.svg" alt="" />
@@ -201,7 +202,7 @@ export default function LocalOfflineApp() {
                   disabled={issueNavigationLocked}
                   aria-current={page === key ? "page" : undefined}
                   onClick={() => {
-                    if (issueNavigationLocked) return
+                    if (issueNavigationLocked || logoutBusy) return
                     setWorkflow(null)
                     setPage(key)
                     setDeliveryFilter("")
@@ -219,14 +220,17 @@ export default function LocalOfflineApp() {
             <footer>
               <Button
                 variant="ghost"
-                disabled={issueNavigationLocked}
+                disabled={issueNavigationLocked || logoutBusy}
                 onClick={async () => {
-                  if (issueNavigationLocked) return
+                  if (issueNavigationLocked || logoutBusy) return
+                  setLogoutBusy(true)
                   try {
                     await localRequest("/auth/logout", {})
                     signedOut()
                   } catch (cause) {
                     setError(message(cause))
+                  } finally {
+                    setLogoutBusy(false)
                   }
                 }}
               >

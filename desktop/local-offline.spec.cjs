@@ -870,7 +870,32 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(sourceSession.state, 'running');
   assert.equal(postgresStatus(postgresRoot, dataRoot).status, 0);
 
+  const sourceCustomer = page.getByRole('row').filter({ hasText: 'second@synthetic.invalid' });
+  await sourceCustomer.getByRole('button', { name: '发放授权', exact: true }).click();
+  const logoutIssue = lifecyclePage(page);
+  await expect(logoutIssue.getByRole('button', { name: '预览授权条件', exact: true })).toBeVisible();
+  let releaseLogout;
+  let signalLogoutStarted;
+  let logoutRequests = 0;
+  const logoutStarted = new Promise(resolve => { signalLogoutStarted = resolve; });
+  const pauseLogout = async route => {
+    logoutRequests++;
+    signalLogoutStarted();
+    await new Promise(resolve => { releaseLogout = resolve; });
+    await route.continue();
+  };
+  await page.route('**/api/v1/auth/logout', pauseLogout);
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
+  await logoutStarted;
+  try {
+    assert.equal(await page.locator('.lc-shell').evaluate(shell => shell.inert), true);
+    await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeDisabled();
+    await expect(logoutIssue.getByRole('button', { name: '预览授权条件', exact: true })).toBeVisible();
+  } finally {
+    releaseLogout();
+  }
+  await page.unroute('**/api/v1/auth/logout', pauseLogout);
+  assert.equal(logoutRequests, 1);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   await closeWindowAndWait(app, scenario, startedAt, dataRoot, postgresRoot);
   app = null;
