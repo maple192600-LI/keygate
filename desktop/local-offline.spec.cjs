@@ -885,15 +885,19 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     await route.continue();
   };
   await page.route('**/api/v1/auth/logout', pauseLogout);
+  const logoutResponse = page.waitForResponse(response =>
+    response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/v1/auth/logout',
+  );
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await logoutStarted;
   try {
     assert.equal(await page.locator('.lc-shell').evaluate(shell => shell.inert), true);
-    await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeDisabled();
-    await expect(logoutIssue.getByRole('button', { name: '预览授权条件', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '退出登录', exact: true, includeHidden: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: '预览授权条件', exact: true, includeHidden: true })).toBeVisible();
   } finally {
     releaseLogout();
   }
+  await logoutResponse;
   await page.unroute('**/api/v1/auth/logout', pauseLogout);
   assert.equal(logoutRequests, 1);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
