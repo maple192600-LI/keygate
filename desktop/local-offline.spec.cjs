@@ -324,6 +324,7 @@ async function showLicenseDetails(page, licenseNumber, action = '查看详情') 
     .getByRole('button', { name: action, exact: true }).click();
   const details = currentLicenseDetails(page);
   await expect(details).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   return details;
 }
 
@@ -599,6 +600,8 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   const customerRow = page.getByRole('row').filter({ hasText: 'second@synthetic.invalid' });
   await customerRow.getByRole('button', { name: '查看档案', exact: true }).click();
   const customerDetails = page.getByRole('heading', { name: '客户档案', exact: true }).locator('xpath=../../..');
+  await expect(customerDetails).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   const customerLicense = customerDetails.getByRole('row').filter({ hasText: licenseNumber });
   await expect(customerLicense).toHaveCount(1);
   await customerLicense.getByRole('button', { name: '查看详情', exact: true }).click();
@@ -672,6 +675,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(deliveryHistory.status, 200);
   assert.ok(deliveryHistory.value.data.items.some(item => item.id === delivered.id));
   await details.getByRole('button', { name: '返回列表', exact: true }).click();
+  await expect(page.getByLabel('查询授权', { exact: true })).toHaveValue(licenseNumber);
 
   await page.getByRole('button', { name: '交付记录', exact: true }).click();
   const deliveryRow = page.getByRole('row').filter({ hasText: licenseNumber });
@@ -688,6 +692,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await expect(details.getByRole('row').filter({ hasText: 'synthetic-recipient@invalid.example' })).toHaveCount(1);
   await details.getByRole('button', { name: '返回列表', exact: true }).click();
   await expect(deliveryRow).toHaveCount(1);
+  await expect(deliveryStateFilter).toHaveValue('recorded');
 
   await page.getByRole('button', { name: '授权', exact: true }).click();
   await page.getByLabel('查询授权', { exact: true }).fill(licenseNumber);
