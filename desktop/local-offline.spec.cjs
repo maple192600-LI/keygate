@@ -32,7 +32,15 @@ function requirePostgresRoot() {
   return root;
 }
 
-function managerEnv(root, dataRoot, postgresRoot) {
+function requireTestPort(name) {
+  const value = process.env[name];
+  if (!/^[0-9]{1,5}$/.test(value || '') || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error(`${name} must select an isolated local test port.`);
+  }
+  return value;
+}
+
+function managerEnv(root, dataRoot, postgresRoot, clientPort = requireTestPort('SNAIL_CLIENT_PORT')) {
   const env = {
     ...process.env,
     APPDATA: path.join(root, 'appdata'),
@@ -41,6 +49,7 @@ function managerEnv(root, dataRoot, postgresRoot) {
     TMP: path.join(root, 'tmp'),
     SNAIL_MANAGER_DEV_DATA: dataRoot,
     SNAIL_MANAGER_DEV_POSTGRES: postgresRoot,
+    SNAIL_CLIENT_PORT: clientPort,
   };
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.SNAIL_MANAGER_DATA_ROOT;
@@ -189,18 +198,28 @@ function postgresStatus(postgresRoot, dataRoot) {
   });
 }
 
-function stopOwnedHost(root, dataRoot, postgresRoot) {
+function stopOwnedHost(root, dataRoot, postgresRoot, clientPort) {
   const sessionPath = path.join(dataRoot, 'runtime-session.json');
   if (!fs.existsSync(sessionPath)) return;
   const session = readSession(dataRoot);
   if (session.state !== 'running' || !processIsAlive(session.pid)) return;
   const stopped = spawnSync(executablePath, [mainPath, '--snail-stop'], {
-    env: managerEnv(root, dataRoot, postgresRoot),
+    env: managerEnv(root, dataRoot, postgresRoot, clientPort),
     windowsHide: true,
     encoding: 'utf8',
     timeout: 30000,
   });
   assert.equal(stopped.status, 0, stopped.stdout + stopped.stderr);
+}
+
+async function clientRequest(clientPort, requestPath, body) {
+  const response = await fetch(`http://127.0.0.1:${clientPort}/api/v1${requestPath}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  return { status: response.status, value: text ? JSON.parse(text) : null };
 }
 
 async function adminRequest(page, requestPath, method = 'GET', body) {
@@ -400,6 +419,9 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   const root = createTaskRoot('snail-keygate-online-');
   const dataRoot = path.join(root, 'data');
   const targetDataRoot = path.join(root, 'target-data');
+  const sourceClientPort = requireTestPort('SNAIL_CLIENT_PORT');
+  const targetClientPort = requireTestPort('SNAIL_MANAGER_TARGET_CLIENT_PORT');
+  assert.notEqual(sourceClientPort, targetClientPort, 'source and target use separate client listener ports');
   const postgresRoot = requirePostgresRoot();
   for (const directory of ['appdata', 'localappdata', 'tmp']) fs.mkdirSync(path.join(root, directory));
   let app;
@@ -410,7 +432,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
       await closeManagerInCleanup(app, scenario, startedAt, dataRoot, postgresRoot);
     }
     logTestPhase(scenario, startedAt, 'target-host-stop-begin');
-    stopOwnedHost(root, targetDataRoot, postgresRoot);
+    stopOwnedHost(root, targetDataRoot, postgresRoot, targetClientPort);
     logTestPhase(scenario, startedAt, 'target-host-stop-complete');
     logTestPhase(scenario, startedAt, 'source-host-stop-begin');
     stopOwnedHost(root, dataRoot, postgresRoot);
@@ -642,7 +664,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     type: 'windows-smbios-uuid-sha256/v1',
     digest: 'a'.repeat(64),
   };
-  const firstActivation = await adminRequest(page, '/client/activate', 'POST', {
+  const firstActivation = await clientRequest(sourceClientPort, '/client/activate', {
     operationId: randomUUID(),
     licenseCode,
     productId: 'cn.snailfinance.desktop',
@@ -710,7 +732,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(Object.hasOwn(transferCommand, 'requestId'), false);
   await lifecycle.getByRole('button', { name: /^(关闭|Close)$/ }).click();
 
-  const secondActivation = await adminRequest(page, '/client/activate', 'POST', {
+  const secondActivation = await clientRequest(sourceClientPort, '/client/activate', {
     operationId: randomUUID(),
     licenseCode,
     productId: 'cn.snailfinance.desktop',
@@ -851,6 +873,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
       TMP: targetRoot.tmp,
       SNAIL_MANAGER_DEV_DATA: targetDataRoot,
       SNAIL_MANAGER_DEV_POSTGRES: postgresRoot,
+      SNAIL_CLIENT_PORT: targetClientPort,
     };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.SNAIL_MANAGER_DATA_ROOT;
@@ -914,7 +937,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await waitForHealth(targetSession.address, { exitCode: null, signalCode: null }, targetSession.setupToken, 5000);
   assert.equal(postgresStatus(postgresRoot, targetDataRoot).status, 0);
   logTestPhase(scenario, startedAt, 'explicit-target-host-stop-begin');
-  stopOwnedHost(root, targetDataRoot, postgresRoot);
+  stopOwnedHost(root, targetDataRoot, postgresRoot, targetClientPort);
   logTestPhase(scenario, startedAt, 'explicit-target-host-stop-complete');
   logTestPhase(scenario, startedAt, 'explicit-source-host-stop-begin');
   stopOwnedHost(root, dataRoot, postgresRoot);
