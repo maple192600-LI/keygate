@@ -62,6 +62,31 @@ function processIsAlive(pid) {
   }
 }
 
+function logTestPhase(scenario, startedAt, phase) {
+  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+  fs.writeSync(2, `T03_SPEC_PHASE ${scenario} +${Math.round(elapsedMs)}ms ${phase}\n`);
+}
+
+function forwardManagerStderr(app, scenario) {
+  const child = app.process();
+  child.stderr?.on('data', chunk => {
+    fs.writeSync(2, `T03_MANAGER_STDERR ${scenario} ${chunk.toString()}`);
+  });
+}
+
+async function launchManager(scenario, startedAt, options) {
+  logTestPhase(scenario, startedAt, 'electron-launch-begin');
+  try {
+    const app = await _electron.launch(options);
+    forwardManagerStderr(app, scenario);
+    logTestPhase(scenario, startedAt, `electron-launch-ready managerPID=${app.process().pid}`);
+    return app;
+  } catch (error) {
+    logTestPhase(scenario, startedAt, 'electron-launch-rejected');
+    throw error;
+  }
+}
+
 async function waitForExit(child, timeout, label) {
   if (child.exitCode !== null && child.exitCode !== undefined) {
     assert.equal(child.exitCode, 0, label + ' exit code');
@@ -187,25 +212,29 @@ async function showLicenseDetails(page, licenseNumber) {
   return page.getByRole('dialog', { name: '授权详情', exact: true });
 }
 
-async function closeWindowAndWait(app) {
+async function closeWindowAndWait(app, scenario, startedAt) {
   const child = app.process();
   const managerPID = child.pid;
   let stderr = '';
   const collectStderr = chunk => { stderr += chunk.toString(); };
   child.stderr?.on('data', collectStderr);
+  logTestPhase(scenario, startedAt, `normal-window-close-listeners-begin managerPID=${managerPID}`);
   await app.evaluate(({ app }) => {
     for (const eventName of ['window-all-closed', 'before-quit', 'will-quit']) {
       app.once(eventName, () => process.stderr.write('T03_MANAGER_EVENT ' + eventName + '\n'));
     }
   });
+  logTestPhase(scenario, startedAt, `normal-window-close-request managerPID=${managerPID}`);
   const exited = waitForExit(child, 30000, '管理窗口进程 ' + managerPID);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  logTestPhase(scenario, startedAt, `normal-window-close-requested managerPID=${managerPID}`);
   try {
     await exited;
   } catch (error) {
     console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ managerPID, stderr }));
     throw error;
   }
+  logTestPhase(scenario, startedAt, `normal-window-close-process-exited managerPID=${managerPID}`);
   child.stderr?.off('data', collectStderr);
   const events = [...stderr.matchAll(/T03_MANAGER_EVENT (window-all-closed|before-quit|will-quit)/g)].map(match => match[1]);
   console.log('T03_MANAGER_EXIT_EVIDENCE', JSON.stringify({ managerPID, events }));
@@ -215,17 +244,26 @@ async function closeWindowAndWait(app) {
 }
 
 test('Windows 登录启动期间的普通打开请求会在服务就绪后显示管理窗口', { timeout: 120000 }, async t => {
+  const scenario = 'startup-window-queue';
+  const startedAt = process.hrtime.bigint();
   const root = createTaskRoot('snail-keygate-startup-');
   const dataRoot = path.join(root, 'data');
   const postgresRoot = requirePostgresRoot();
   for (const directory of ['appdata', 'localappdata', 'tmp']) fs.mkdirSync(path.join(root, directory));
   let app;
   t.after(async () => {
-    if (app) await app.close();
+    logTestPhase(scenario, startedAt, 'cleanup-begin');
+    if (app) {
+      logTestPhase(scenario, startedAt, 'playwright-app-close-begin');
+      await app.close();
+      logTestPhase(scenario, startedAt, 'playwright-app-close-complete');
+    }
+    logTestPhase(scenario, startedAt, 'owned-host-stop-begin');
     stopOwnedHost(root, dataRoot, postgresRoot);
+    logTestPhase(scenario, startedAt, 'owned-host-stop-complete');
   });
 
-  app = await _electron.launch({
+  app = await launchManager(scenario, startedAt, {
     executablePath,
     args: [mainPath, '--startup'],
     env: managerEnv(root, dataRoot, postgresRoot),
@@ -233,11 +271,14 @@ test('Windows 登录启动期间的普通打开请求会在服务就绪后显示
 
   const runtimeConfig = path.join(dataRoot, 'runtime.json');
   const sessionFile = path.join(dataRoot, 'runtime-session.json');
+  logTestPhase(scenario, startedAt, 'startup-runtime-config-wait-begin');
   await expect.poll(() => fs.existsSync(runtimeConfig) && !fs.existsSync(sessionFile), {
     timeout: 60000,
     intervals: [10, 20, 50, 100, 200],
   }).toBe(true);
+  logTestPhase(scenario, startedAt, 'startup-runtime-config-observed');
 
+  logTestPhase(scenario, startedAt, 'normal-second-instance-begin');
   const normalOpen = spawnSync(executablePath, [mainPath], {
     env: managerEnv(root, dataRoot, postgresRoot),
     windowsHide: true,
@@ -245,8 +286,11 @@ test('Windows 登录启动期间的普通打开请求会在服务就绪后显示
     timeout: 15000,
   });
   assert.equal(normalOpen.status, 0, normalOpen.stdout + normalOpen.stderr);
+  logTestPhase(scenario, startedAt, 'normal-second-instance-complete');
 
+  logTestPhase(scenario, startedAt, 'first-window-wait-begin');
   const page = await app.firstWindow({ timeout: 60000 });
+  logTestPhase(scenario, startedAt, 'first-window-ready');
   await expect(page.getByRole('heading', { name: '首次设置', exact: true })).toBeVisible();
   const session = readSession(dataRoot);
   assert.equal(session.state, 'running');
@@ -257,9 +301,12 @@ test('Windows 登录启动期间的普通打开请求会在服务就绪后显示
   assert.equal(postgresStatus(postgresRoot, dataRoot).status, 0);
   console.log('T03_STARTUP_PROCESSES', JSON.stringify({ managerPID, serviceHostPID: session.pid }));
   console.log('T03_STARTUP_EVIDENCE', root);
+  logTestPhase(scenario, startedAt, `startup-assertions-complete managerPID=${managerPID} serviceHostPID=${session.pid}`);
 });
 
 test('授权码签发恢复、续期换机、备份移交、账号隔离与服务关闭重开', { timeout: 300000 }, async t => {
+  const scenario = 'online-license-lifecycle';
+  const startedAt = process.hrtime.bigint();
   const root = createTaskRoot('snail-keygate-online-');
   const dataRoot = path.join(root, 'data');
   const targetDataRoot = path.join(root, 'target-data');
@@ -268,19 +315,28 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   let app;
   let page;
   t.after(async () => {
+    logTestPhase(scenario, startedAt, 'cleanup-begin');
     if (app) {
+      logTestPhase(scenario, startedAt, 'playwright-app-close-begin');
       await app.close();
+      logTestPhase(scenario, startedAt, 'playwright-app-close-complete');
     }
+    logTestPhase(scenario, startedAt, 'target-host-stop-begin');
     stopOwnedHost(root, targetDataRoot, postgresRoot);
+    logTestPhase(scenario, startedAt, 'target-host-stop-complete');
+    logTestPhase(scenario, startedAt, 'source-host-stop-begin');
     stopOwnedHost(root, dataRoot, postgresRoot);
+    logTestPhase(scenario, startedAt, 'source-host-stop-complete');
   });
 
-  app = await _electron.launch({
+  app = await launchManager(scenario, startedAt, {
     executablePath,
     args: [mainPath],
     env: managerEnv(root, dataRoot, postgresRoot),
   });
+  logTestPhase(scenario, startedAt, 'source-first-window-wait-begin');
   page = await app.firstWindow({ timeout: 45000 });
+  logTestPhase(scenario, startedAt, 'source-first-window-ready');
   await expect(page.getByRole('heading', { name: '首次设置', exact: true })).toBeVisible();
 
   const address = new URL(page.url()).origin;
@@ -595,18 +651,20 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
 
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  await closeWindowAndWait(app);
+  await closeWindowAndWait(app, scenario, startedAt);
   app = null;
   assert.equal(processIsAlive(sourceSession.pid), true);
   await waitForHealth(sourceSession.address, { exitCode: null, signalCode: null }, sourceSession.setupToken, 5000);
   assert.equal(postgresStatus(postgresRoot, dataRoot).status, 0);
 
-  app = await _electron.launch({
+  app = await launchManager(scenario, startedAt, {
     executablePath,
     args: [mainPath],
     env: managerEnv(root, dataRoot, postgresRoot),
   });
+  logTestPhase(scenario, startedAt, 'source-reopen-first-window-wait-begin');
   page = await app.firstWindow({ timeout: 45000 });
+  logTestPhase(scenario, startedAt, 'source-reopen-first-window-ready');
   assert.equal(readSession(dataRoot).pid, sourceSession.pid);
   await waitForHealth(sourceSession.address, { exitCode: null, signalCode: null }, sourceSession.setupToken, 5000);
   const reopenedRuntime = JSON.parse(fs.readFileSync(path.join(dataRoot, 'runtime.json'), 'utf8'));
@@ -622,7 +680,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await page.getByRole('button', { name: '客户', exact: true }).click();
   await page.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  await closeWindowAndWait(app);
+  await closeWindowAndWait(app, scenario, startedAt);
   app = null;
 
   fs.mkdirSync(path.join(root, 'target-appdata'));
@@ -647,8 +705,10 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     delete env.SNAIL_MANAGER_DATA_ROOT;
     return env;
   }
-  app = await _electron.launch({ executablePath, args: [mainPath], env: targetEnv() });
+  app = await launchManager(scenario, startedAt, { executablePath, args: [mainPath], env: targetEnv() });
+  logTestPhase(scenario, startedAt, 'target-first-window-wait-begin');
   page = await app.firstWindow({ timeout: 45000 });
+  logTestPhase(scenario, startedAt, 'target-first-window-ready');
   const targetRecovery = await setupOwner(
     app,
     page,
@@ -697,13 +757,17 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.ok(importedCode.value.data.licenseCode === licenseCode, 'business bundle preserves activation code');
 
   const targetSession = readSession(targetDataRoot);
-  await closeWindowAndWait(app);
+  await closeWindowAndWait(app, scenario, startedAt);
   app = null;
   assert.equal(processIsAlive(targetSession.pid), true);
   await waitForHealth(targetSession.address, { exitCode: null, signalCode: null }, targetSession.setupToken, 5000);
   assert.equal(postgresStatus(postgresRoot, targetDataRoot).status, 0);
+  logTestPhase(scenario, startedAt, 'explicit-target-host-stop-begin');
   stopOwnedHost(root, targetDataRoot, postgresRoot);
+  logTestPhase(scenario, startedAt, 'explicit-target-host-stop-complete');
+  logTestPhase(scenario, startedAt, 'explicit-source-host-stop-begin');
   stopOwnedHost(root, dataRoot, postgresRoot);
+  logTestPhase(scenario, startedAt, 'explicit-source-host-stop-complete');
   assert.equal(postgresStatus(postgresRoot, targetDataRoot).status, 3);
   assert.equal(postgresStatus(postgresRoot, dataRoot).status, 3);
   console.log('T03_ONLINE_EVIDENCE', root);
