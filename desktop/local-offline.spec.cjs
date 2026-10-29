@@ -604,7 +604,9 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   let details = await showLicenseDetails(page, licenseNumber);
   await expect(details.getByText(licenseNumber, { exact: true })).toBeVisible();
   await details.getByRole('button', { name: '显示授权码', exact: true }).click();
-  assert.ok((await details.locator('dd').allInnerTexts()).some(text => text.trim() === licenseCode), 'detail code is visible');
+  await expect.poll(async () => details.locator('code').evaluateAll((nodes, expected) =>
+    nodes.some(node => node.textContent?.trim() === expected && node.getBoundingClientRect().height > 0), licenseCode),
+  { message: 'detail authorization code is visible' }).toBe(true);
   await expect(details.getByRole('button', { name: '复制授权码', exact: true })).toBeVisible();
   await copyFromFocusedWindow(
     app,

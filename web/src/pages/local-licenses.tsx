@@ -498,6 +498,7 @@ function LicenseDetails({
                   </Button>
                 )}
               </div>
+              {codeVisible && <code className="block break-all rounded-md bg-muted p-3 text-sm">{licenseCode}</code>}
               <IssuanceStateForm
                 kind="license"
                 id={row.id}
