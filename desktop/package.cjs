@@ -42,6 +42,7 @@ async function main() {
     files:['main.cjs','runtime.cjs','package.json'], directories:{output},
     extraMetadata:{snailSourceCandidate:candidate},
     extraResources:[
+      {from:path.join(__dirname,'icon.ico'),to:'icon.ico'},
       {from:path.join(root,'bin/snail-license-center.exe'),to:'server/bin/snail-license-center.exe'},
       {from:path.join(root,'db/migrations'),to:'server/db/migrations',filter:['*.up.sql']},
       {from:path.join(root,'web/dist'),to:'server/web/dist'},
@@ -55,7 +56,7 @@ async function main() {
       ...['LICENSE','NOTICE'].map(file=>({from:path.join(root,file),to:file})),
       {from:path.join(root,'docs/蜗牛客户与授权中心_本地操作说明.md'),to:'中文操作说明.md'},
     ],
-    win:{target:['dir','zip'],artifactName:'小云雀客户授权中心-${version}-${arch}.${ext}',signAndEditExecutable:true},
+    win:{target:['dir','zip'],icon:path.join(__dirname,'icon.ico'),artifactName:'小云雀客户授权中心-${version}-${arch}.${ext}',signAndEditExecutable:true},
     afterPack:context=>{
       for(const file of nativeLock.msvc.files) {
         const bytes=fs.readFileSync(path.join(context.appOutDir,'resources/postgresql/bin',file.file));

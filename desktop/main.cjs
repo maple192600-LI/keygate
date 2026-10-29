@@ -129,6 +129,7 @@ function createWindow(session) {
     minWidth: 1120,
     minHeight: 720,
     title: productName,
+    icon: app.isPackaged ? path.join(process.resourcesPath, 'icon.ico') : path.join(__dirname, 'icon.ico'),
     backgroundColor: '#f7f7f8',
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, devTools: !app.isPackaged },
   });
