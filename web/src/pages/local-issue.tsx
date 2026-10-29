@@ -1,4 +1,4 @@
-import { type FormEvent, useRef, useState } from "react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -63,11 +63,13 @@ const failed = (cause: unknown) => (cause instanceof Error ? cause.message : "æ“
 export default function LocalIssue({
   customer,
   onClose,
+  onNavigationLockChange,
   returnLabel,
   existing,
 }: {
   customer: CommercialCustomer
   onClose: () => void
+  onNavigationLockChange: (locked: boolean) => void
   returnLabel: string
   existing?: { id: string; revision: number; action: "renew" | "transfer"; bindingId?: string }
 }) {
@@ -86,6 +88,10 @@ export default function LocalIssue({
   const [notice, setNotice] = useState("")
   const [uncertain, setUncertain] = useState(false)
   const attempt = useRef<Command | null>(null)
+  useEffect(() => {
+    onNavigationLockChange(busy || uncertain)
+    return () => onNavigationLockChange(false)
+  }, [busy, uncertain, onNavigationLockChange])
 
   async function perform(run: () => Promise<void>) {
     if (busy) return

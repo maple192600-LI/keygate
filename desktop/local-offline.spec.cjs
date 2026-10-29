@@ -561,10 +561,14 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await page.route('**/api/v1/admin/offline-licenses', loseIssueResponse);
   await issue.getByRole('button', { name: '确认办理', exact: true }).click();
   await expect(issue.getByRole('alert')).toBeVisible();
-  await page.unroute('**/api/v1/admin/offline-licenses', loseIssueResponse);
   assert.equal(initialPosts, 1);
   assert.ok(createResult);
   assert.match(operationID, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  for (const navigation of ['概览', '客户', '授权', '交付记录', '即将到期', '设置']) {
+    await expect(page.getByRole('button', { name: navigation, exact: true })).toBeDisabled();
+  }
+  await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeDisabled();
+  await expect(issue.getByRole('button', { name: '查询本次结果', exact: true })).toBeVisible();
 
   const licenseID = createResult.licenseId;
   const licenseNumber = 'L-' + licenseID.replaceAll('-', '').toUpperCase();
@@ -581,6 +585,8 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await expect(issue.getByRole('heading', { name: /授权已办理/ })).toBeVisible();
   assert.equal(recoveredOperation.licenseId, licenseID);
   assert.equal(recoveredOperation.licenseCode, undefined);
+  assert.equal(initialPosts, 1, 'navigation lock preserves the unresolved operation without resubmitting');
+  await page.unroute('**/api/v1/admin/offline-licenses', loseIssueResponse);
   assert.equal(recoveredCode.headers()['cache-control'], 'no-store');
   assert.ok((await recoveredCode.json()).data.licenseCode === licenseCode, 'recovered activation code matches original');
   assert.ok(licenseCode);

@@ -50,6 +50,7 @@ export default function LocalOfflineApp() {
   const [error, setError] = useState("")
   const [reload, setReload] = useState(0)
   const [workflow, setWorkflow] = useState<WorkspaceWorkflow | null>(null)
+  const [issueNavigationLocked, setIssueNavigationLocked] = useState(false)
   const [page, setPage] = useState<"overview" | "customers" | "licenses" | "delivery" | "expiring" | "settings">(
     "customers",
   )
@@ -97,6 +98,7 @@ export default function LocalOfflineApp() {
     }
   }, [reload])
   const signedOut = () => {
+    if (issueNavigationLocked) return
     setOwner(null)
     setWorkflow(null)
     setMode("login")
@@ -196,8 +198,10 @@ export default function LocalOfflineApp() {
                 <Button
                   key={key}
                   variant="ghost"
+                  disabled={issueNavigationLocked}
                   aria-current={page === key ? "page" : undefined}
                   onClick={() => {
+                    if (issueNavigationLocked) return
                     setWorkflow(null)
                     setPage(key)
                     setDeliveryFilter("")
@@ -215,7 +219,9 @@ export default function LocalOfflineApp() {
             <footer>
               <Button
                 variant="ghost"
+                disabled={issueNavigationLocked}
                 onClick={async () => {
+                  if (issueNavigationLocked) return
                   try {
                     await localRequest("/auth/logout", {})
                     signedOut()
@@ -436,6 +442,7 @@ export default function LocalOfflineApp() {
                   customer={workflow.customer}
                   existing={workflow.existing}
                   returnLabel={workflow.returnLabel}
+                  onNavigationLockChange={setIssueNavigationLocked}
                   onClose={() => {
                     setWorkflow(workflow.returnTo ?? null)
                     setEpoch((value) => value + 1)
