@@ -1,4 +1,4 @@
-import { KeyRound, LayoutDashboard, LogOut, Send, Settings, Users } from "lucide-react"
+import { Clock3, LogOut, RefreshCw, Settings, Users } from "lucide-react"
 import { type FormEvent, type ReactNode, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -7,10 +7,13 @@ import { Label } from "@/components/ui/label"
 import { LocalAPIError, type LocalOwner, localRequest } from "@/lib/local-offline-api"
 import "./local-offline.css"
 import LocalCustomers, { type CommercialCustomer, CustomerForm } from "./local-customers"
-import LocalDataSettings, { LocalOperationHistory, MerchantSettings } from "./local-data-settings"
+import LocalDataSettings, {
+  LocalOperationHistory,
+  LocalRecoverySettings,
+  MerchantSettings,
+} from "./local-data-settings"
 import LocalIssue from "./local-issue"
 import LocalLicenses, { type OfflineLicense } from "./local-licenses"
-import LocalOverview from "./local-overview"
 import LocalSigningIdentity from "./local-signing"
 
 const attribution = (
@@ -35,16 +38,16 @@ export default function LocalOfflineApp() {
   const [reload, setReload] = useState(0)
   const [issuing, setIssuing] = useState<{
     customer: CommercialCustomer
-    existing?: { id: string; revision: number; action: "renew" | "transfer" }
+    existing?: { id: string; revision: number; action: "renew" | "transfer"; bindingId?: string }
   } | null>(null)
-  const [page, setPage] = useState<"overview" | "customers" | "licenses" | "delivery" | "settings">("customers")
-  const [deliveryFilter, setDeliveryFilter] = useState("")
+  const [page, setPage] = useState<"customers" | "expiring" | "settings">("customers")
   const [settingsTab, setSettingsTab] = useState("basic")
   const [choosingCustomer, setChoosingCustomer] = useState(false),
     [creatingCustomer, setCreatingCustomer] = useState(false)
-  const [epoch, setEpoch] = useState(0),
-    [expiring, setExpiring] = useState(false),
-    [termFilter, setTermFilter] = useState("")
+  const [epoch, setEpoch] = useState(0)
+  useEffect(() => {
+    document.title = "小云雀客户授权中心"
+  }, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: reload retries the initial connection after a service error.
   useEffect(() => {
     let alive = true
@@ -85,15 +88,17 @@ export default function LocalOfflineApp() {
     setIssuing(null)
     setMode("login")
   }
-  const manageLicense = async (row: OfflineLicense, action: "renew" | "transfer") => {
+  const manageLicense = async (row: OfflineLicense, action: "renew" | "transfer", bindingId?: string) => {
     try {
       const customer = await localRequest<CommercialCustomer>(`/admin/commercial-customers/${row.customerId}`)
-      setIssuing({ customer, existing: { id: row.id, revision: row.revision, action } })
+      setIssuing({
+        customer,
+        existing: { id: row.id, revision: row.revision, action, ...(bindingId ? { bindingId } : {}) },
+      })
     } catch (cause) {
       setError(message(cause))
     }
   }
-  const createLicense = () => setChoosingCustomer(true)
   return (
     <div className="snail-local min-h-screen bg-muted/40 text-foreground">
       {mode === "loading" && (
@@ -129,20 +134,14 @@ export default function LocalOfflineApp() {
         <div className="lc-shell">
           <aside className="lc-sidebar">
             <div className="lc-brand">
-              <img src="/snail-icon.svg" alt="" />
-              <strong>
-                蜗牛客户与
-                <br />
-                授权中心
-              </strong>
+              <img src="/xiaoyunque-icon.svg" alt="" />
+              <strong>小云雀客户授权中心</strong>
             </div>
             <nav aria-label="管理导航">
               {(
                 [
-                  ["overview", "概览", LayoutDashboard],
                   ["customers", "客户", Users],
-                  ["licenses", "授权", KeyRound],
-                  ["delivery", "交付记录", Send],
+                  ["expiring", "即将到期", Clock3],
                   ["settings", "设置", Settings],
                 ] as const
               ).map(([key, label, Icon]) => (
@@ -152,10 +151,7 @@ export default function LocalOfflineApp() {
                   aria-current={page === key ? "page" : undefined}
                   onClick={() => {
                     setPage(key)
-                    setDeliveryFilter("")
                     if (key === "settings") setSettingsTab("basic")
-                    setExpiring(false)
-                    setTermFilter("")
                     setError("")
                   }}
                 >
@@ -186,11 +182,7 @@ export default function LocalOfflineApp() {
             <header className="lc-topbar">
               <span>
                 客户与授权管理<span className="lc-breadcrumb-separator">/</span>
-                {
-                  { overview: "概览", customers: "客户", licenses: "授权", delivery: "交付记录", settings: "设置" }[
-                    page
-                  ]
-                }
+                {{ customers: "客户", expiring: "即将到期", settings: "设置" }[page]}
               </span>
               <span>{owner.username}</span>
             </header>
@@ -207,29 +199,14 @@ export default function LocalOfflineApp() {
                   onManage={manageLicense}
                 />
               )}
-              {(page === "licenses" || page === "delivery") && (
+              {page === "expiring" && (
                 <LocalLicenses
-                  key={`${page}-${expiring}-${termFilter}-${deliveryFilter}`}
-                  initialTermState={termFilter}
-                  initialDeliveryState={deliveryFilter}
-                  delivery={page === "delivery"}
-                  initialExpiring={expiring}
-                  epoch={epoch}
-                  onCreate={createLicense}
-                  onManage={manageLicense}
-                />
-              )}
-              {page === "overview" && (
-                <LocalOverview
+                  key={page}
+                  initialExpiring
+                  title="即将到期"
                   epoch={epoch}
                   onManage={manageLicense}
-                  onCreate={createLicense}
-                  onNavigate={(target, soon, term) => {
-                    setPage(target)
-                    setDeliveryFilter(target === "delivery" ? "pending" : "")
-                    setExpiring(Boolean(soon))
-                    setTermFilter(term || "")
-                  }}
+                  onChanged={() => setEpoch((value) => value + 1)}
                 />
               )}
               {page === "settings" && (
@@ -245,7 +222,7 @@ export default function LocalOfflineApp() {
                       {(
                         [
                           ["basic", "基本信息"],
-                          ["identity", "签发身份"],
+                          ["service", "服务"],
                           ["data", "备份与数据"],
                           ["history", "操作记录"],
                         ] as const
@@ -262,7 +239,7 @@ export default function LocalOfflineApp() {
                           onKeyDown={(event) => {
                             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
                             event.preventDefault()
-                            const keys = ["basic", "identity", "data", "history"]
+                            const keys = ["basic", "service", "data", "history"]
                             const position = keys.indexOf(key)
                             const next =
                               event.key === "Home"
@@ -287,15 +264,19 @@ export default function LocalOfflineApp() {
                       <div className="lc-settings-pair">
                         <MerchantSettings />
                         <AccountSettings onSignedOut={signedOut} />
+                        <LocalRecoverySettings />
                       </div>
                     </div>
                     <div
                       role="tabpanel"
-                      id="settings-panel-identity"
-                      aria-labelledby="settings-tab-identity"
-                      hidden={settingsTab !== "identity"}
+                      id="settings-panel-service"
+                      aria-labelledby="settings-tab-service"
+                      hidden={settingsTab !== "service"}
                     >
-                      <LocalSigningIdentity key={epoch} />
+                      <div className="grid gap-5">
+                        <RuntimeStatus />
+                        <LocalSigningIdentity key={epoch} />
+                      </div>
                     </div>
                     <div
                       role="tabpanel"
@@ -350,11 +331,6 @@ export default function LocalOfflineApp() {
                 setIssuing(null)
                 setEpoch((value) => value + 1)
               }}
-              onSettings={() => {
-                setIssuing(null)
-                setPage("settings")
-                setSettingsTab("identity")
-              }}
             />
           )}
         </div>
@@ -377,12 +353,39 @@ function LoginForm({
   const [confirm, setConfirm] = useState("")
   const [siteName, setSiteName] = useState("")
   const [contact, setContact] = useState("")
+  const [recoveryCredential, setRecoveryCredential] = useState("")
+  const [recovering, setRecovering] = useState(false)
+  const [newPassword, setNewPassword] = useState("")
+  const [confirmNewPassword, setConfirmNewPassword] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
+  const [notice, setNotice] = useState("")
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (busy) return
     setError("")
+    setNotice("")
+    if (recovering) {
+      if (newPassword !== confirmNewPassword) {
+        setError("两次新密码输入不一致")
+        return
+      }
+      setBusy(true)
+      try {
+        await localRequest("/local/recovery/reset", { username, recoveryCredential, newPassword })
+        setRecoveryCredential("")
+        setNewPassword("")
+        setConfirmNewPassword("")
+        setPassword("")
+        setRecovering(false)
+        setNotice("密码已更新，请使用新密码登录")
+      } catch (cause) {
+        setError(message(cause))
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     if (setup && password !== confirm) {
       setError("两次密码输入不一致")
       return
@@ -390,10 +393,15 @@ function LoginForm({
     setBusy(true)
     try {
       if (setup) {
-        await localRequest("/local/setup", { username, password, siteName, contact })
+        const result = await localRequest<{ recoveryCredential: string }>("/local/setup", {
+          username,
+          password,
+          siteName,
+          contact,
+        })
         setPassword("")
         setConfirm("")
-        onSetup()
+        setRecoveryCredential(result.recoveryCredential)
       } else onLogin(await localRequest<LocalOwner>("/auth/password/login", { username, password }))
     } catch (cause) {
       setError(message(cause))
@@ -401,9 +409,42 @@ function LoginForm({
       setBusy(false)
     }
   }
+  if (setup && recoveryCredential) {
+    return (
+      <main className="mx-auto grid min-h-screen max-w-md content-center gap-6 px-6 py-10">
+        <h1 className="text-2xl font-semibold">保存账号恢复凭据</h1>
+        <section className="grid gap-4 rounded-xl border bg-card p-6">
+          <div>此凭据仅显示一次。请保存在安全位置；遗失后可登录设置重新生成。</div>
+          <code className="select-all break-all rounded border bg-muted p-3">{recoveryCredential}</code>
+          <Button
+            variant="outline"
+            onClick={() =>
+              void navigator.clipboard.writeText(recoveryCredential).catch((cause) => setError(message(cause)))
+            }
+          >
+            复制恢复凭据
+          </Button>
+          {error && (
+            <div role="alert" className="text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          <Button
+            onClick={() => {
+              setRecoveryCredential("")
+              onSetup()
+            }}
+          >
+            已妥善保存，继续登录
+          </Button>
+        </section>
+        {attribution}
+      </main>
+    )
+  }
   return (
     <main className="mx-auto grid min-h-screen max-w-md content-center gap-6 px-6 py-10">
-      <h1 className="text-2xl font-semibold">{setup ? "首次设置" : "蜗牛客户与授权中心"}</h1>
+      <h1 className="text-2xl font-semibold">{setup ? "首次设置" : "小云雀客户授权中心"}</h1>
       <form className="grid gap-5 rounded-xl border bg-card p-6" onSubmit={submit}>
         <Field name="username" label="管理用户名">
           <Input
@@ -414,18 +455,57 @@ function LoginForm({
             required
           />
         </Field>
-        <Field name="password" label="密码">
-          <Input
-            id="password"
-            placeholder={setup ? "至少10个字符" : undefined}
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete={setup ? "new-password" : "current-password"}
-            required
-          />
-        </Field>
-        {setup && (
+        {recovering ? (
+          <>
+            <Field name="recoveryCredential" label="恢复凭据">
+              <Input
+                id="recoveryCredential"
+                value={recoveryCredential}
+                onChange={(event) => setRecoveryCredential(event.target.value)}
+                autoComplete="off"
+                required
+              />
+            </Field>
+            <Field name="newPassword" label="新密码">
+              <Input
+                id="newPassword"
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                placeholder="至少10个字符"
+                required
+              />
+            </Field>
+            <Field name="confirmNewPassword" label="确认新密码">
+              <Input
+                id="confirmNewPassword"
+                type="password"
+                value={confirmNewPassword}
+                onChange={(event) => setConfirmNewPassword(event.target.value)}
+                autoComplete="new-password"
+                minLength={10}
+                maxLength={128}
+                required
+              />
+            </Field>
+          </>
+        ) : (
+          <Field name="password" label="密码">
+            <Input
+              id="password"
+              placeholder={setup ? "至少10个字符" : undefined}
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={setup ? "new-password" : "current-password"}
+              required
+            />
+          </Field>
+        )}
+        {setup && !recovering && (
           <>
             <Field name="confirm" label="确认密码">
               <Input
@@ -450,9 +530,31 @@ function LoginForm({
             {error}
           </div>
         )}
+        {notice && (
+          <div role="status" className="text-sm">
+            {notice}
+          </div>
+        )}
         <Button disabled={busy} type="submit">
-          {busy ? "正在提交…" : setup ? "完成设置" : "登录"}
+          {busy ? "正在提交…" : recovering ? "重置密码" : setup ? "完成设置" : "登录"}
         </Button>
+        {!setup && (
+          <Button
+            type="button"
+            variant="link"
+            className="justify-self-start"
+            onClick={() => {
+              setRecovering(!recovering)
+              setRecoveryCredential("")
+              setNewPassword("")
+              setConfirmNewPassword("")
+              setError("")
+              setNotice("")
+            }}
+          >
+            {recovering ? "返回登录" : "忘记密码"}
+          </Button>
+        )}
       </form>
       <footer>{attribution}</footer>
     </main>
@@ -649,5 +751,52 @@ function IssueCustomerPicker({
         </DialogBody>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function RuntimeStatus() {
+  const [status, setStatus] = useState<{ state: "ready" | "unavailable"; message: string; checkedAt: Date } | null>(
+    null,
+  )
+  const [busy, setBusy] = useState(false)
+  async function refresh() {
+    setBusy(true)
+    try {
+      const response = await fetch("/health", { cache: "no-store", signal: AbortSignal.timeout(3000) })
+      const result = await response.json()
+      if (!response.ok || !result.success || result.data?.deployment !== "local_offline") {
+        throw new Error(result.error?.message || "本机授权服务不可用")
+      }
+      setStatus({ state: "ready", message: "服务与数据库运行正常", checkedAt: new Date() })
+    } catch (cause) {
+      setStatus({
+        state: "unavailable",
+        message: cause instanceof Error ? cause.message : "本机授权服务不可用",
+        checkedAt: new Date(),
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load the actual service status when entering settings.
+  useEffect(() => {
+    void refresh()
+  }, [])
+  return (
+    <section className="rounded-xl border bg-card p-6">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">授权服务</h2>
+        <Button variant="outline" disabled={busy} onClick={() => void refresh()}>
+          <RefreshCw aria-hidden="true" />
+          {busy ? "正在检查…" : "刷新状态"}
+        </Button>
+      </div>
+      <div role="status" aria-live="polite" className={status?.state === "unavailable" ? "text-destructive" : ""}>
+        {status
+          ? `${status.message} · ${status.checkedAt.toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })}`
+          : "正在读取服务状态…"}
+      </div>
+      <div className="mt-3 text-sm text-muted-foreground">固定 HTTPS 域名：待部署配置</div>
+    </section>
   )
 }

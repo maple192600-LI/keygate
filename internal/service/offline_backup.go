@@ -279,13 +279,22 @@ func (s *OfflineBackupService) ValidateRestoreContinuity(ctx context.Context, c 
 		damagedIdentity = true
 	}
 	if damagedIdentity {
-		if signingPassphrase == "" {
-			return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件缺失或损坏，请填写原签发密码验证备份中的身份后恢复"}
-		}
 		keys := offline.NewKeyStore(c.IdentityRoot)
 		defer keys.Lock()
-		identity, unlockErr := keys.Unlock(signingPassphrase, time.Now().Add(time.Minute))
+		master, decodeErr := hex.DecodeString(c.EncryptionSecret)
+		servicePassphrase, deriveErr := offline.ServicePassphrase(master)
+		var identity offline.PublicIdentity
+		var unlockErr error
+		if decodeErr == nil && deriveErr == nil {
+			identity, unlockErr = keys.UnlockService(servicePassphrase)
+		}
+		if unlockErr != nil && signingPassphrase != "" {
+			identity, unlockErr = keys.Unlock(signingPassphrase, time.Now().Add(time.Minute))
+		}
 		if unlockErr != nil {
+			if signingPassphrase == "" {
+				return &offline.Error{Code: "RESTORE_SIGNING_PASSWORD_REQUIRED", Message: "当前签发身份文件需要核对原密码或使用服务签发身份备份后恢复"}
+			}
 			return unlockErr
 		}
 		if identity.KeyID != expected.KeyID {
@@ -350,7 +359,7 @@ func (s *OfflineBackupService) DiscardRestore(ctx context.Context, c *RestoreCan
 		c.Store = nil
 	}
 	if c.DatabaseName != "" {
-		if _, err := s.Store.DB.ExecContext(ctx, "DROP DATABASE IF EXISTS "+c.DatabaseName); err != nil {
+		if err := s.Store.DropDatabase(ctx, c.DatabaseName); err != nil {
 			errs = append(errs, err)
 		}
 	}

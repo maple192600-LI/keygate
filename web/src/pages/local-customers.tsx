@@ -36,6 +36,7 @@ const empty: Draft = {
   sourceText: "",
   notes: "",
 }
+const customerNumber = (id: string) => `C-${id.replaceAll("-", "").toUpperCase()}`
 
 export default function LocalCustomers({
   onIssue,
@@ -106,7 +107,7 @@ export default function LocalCustomers({
             <Search aria-hidden="true" />
             <Input
               aria-label="查询客户"
-              placeholder="客户、联系人、联系方式或来源"
+              placeholder="客户、联系人、联系方式、客户编号或授权编号"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -142,6 +143,7 @@ export default function LocalCustomers({
                   >
                     {customer.displayName}
                   </button>
+                  <div className="text-xs text-muted-foreground">{customerNumber(customer.id)}</div>
                 </TableCell>
                 <TableCell>{customer.contactName || "—"}</TableCell>
                 <TableCell>{customer.contactMethod || customer.email || "—"}</TableCell>
@@ -387,9 +389,9 @@ export function CustomerForm({
             title="已有授权"
             onManage={
               onManage
-                ? (row, action) => {
+                ? (row, action, bindingId) => {
                     onClose()
-                    onManage(row, action)
+                    onManage(row, action, bindingId)
                   }
                 : undefined
             }
@@ -425,6 +427,7 @@ export function CustomerForm({
         className="lc-drawer w-[1020px] max-w-[95vw] gap-6 overflow-y-auto p-7"
       >
         <h2 className="text-xl font-semibold">客户档案</h2>
+        <div className="text-sm text-muted-foreground">客户编号 {customerNumber(customer.id)}</div>
         <div className="lc-drawer-body">{content}</div>
       </SheetContent>
     </Sheet>

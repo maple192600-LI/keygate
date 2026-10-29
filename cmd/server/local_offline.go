@@ -5,33 +5,39 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/tabloy/keygate/internal/branding"
-	"github.com/tabloy/keygate/internal/config"
-	"github.com/tabloy/keygate/internal/crypto"
-	"github.com/tabloy/keygate/internal/handler"
-	"github.com/tabloy/keygate/internal/middleware"
-	"github.com/tabloy/keygate/internal/offline"
-	"github.com/tabloy/keygate/internal/service"
-	"github.com/tabloy/keygate/internal/store"
-	"github.com/tabloy/keygate/pkg/response"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/tabloy/keygate/internal/branding"
+	"github.com/tabloy/keygate/internal/config"
+	"github.com/tabloy/keygate/internal/crypto"
+	"github.com/tabloy/keygate/internal/handler"
+	"github.com/tabloy/keygate/internal/middleware"
+	"github.com/tabloy/keygate/internal/model"
+	"github.com/tabloy/keygate/internal/offline"
+	"github.com/tabloy/keygate/internal/service"
+	"github.com/tabloy/keygate/internal/store"
+	"github.com/tabloy/keygate/pkg/response"
+	"github.com/uptrace/bun"
 )
 
 // The local runtime branches before constructing any online token service,
 // payment integration, analytics collection, email queue or scheduled expiry.
 func newLocalOfflineRouter(cfg *config.Config, db *store.Store, shutdown ...func()) *gin.Engine {
-	router, _ := newManagedLocalRouter(cfg, db, nil, shutdown...)
+	router, _, _ := newManagedLocalRouter(cfg, db, nil, shutdown...)
 	return router
 }
-func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*service.RestoreCandidate) error, shutdown ...func()) (*gin.Engine, func(context.Context) error) {
+func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*service.RestoreCandidate) error, shutdown ...func()) (*gin.Engine, *gin.Engine, func(context.Context) error) {
 	master, err := hex.DecodeString(cfg.ReleaseKeyEncryptionKey)
 	if err != nil || len(master) != 32 {
 		panic("本地运行数据加密秘密无效")
@@ -95,10 +101,13 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 		identityDir = cfg.SnailDataDir
 	}
 	keys := offline.NewKeyStore(identityDir)
-	local.OnSessionEnd = keys.Lock
+	servicePassphrase, err := initializeOfflineServiceIdentity(context.Background(), db, keys, master)
+	if err != nil {
+		panic(err)
+	}
 	api.GET("/setup/status", setup.Status)
 	api.GET("/config", func(c *gin.Context) {
-		response.OK(c, gin.H{"site_name": "蜗牛客户与授权中心", "deployment": "local_offline", "attribution_text": branding.Tagline, "attribution_url": branding.URL})
+		response.OK(c, gin.H{"site_name": "小云雀客户授权中心", "deployment": "local_offline", "attribution_text": branding.Tagline, "attribution_url": branding.URL})
 	})
 	authRate := middleware.RateLimitByIPScoped("local-password:"+cfg.Port, 10, time.Minute)
 	api.POST("/local/setup", func(c *gin.Context) {
@@ -113,10 +122,13 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	}, authRate, local.Setup)
 	api.POST("/auth/password/login", authRate, local.Login)
 	api.POST("/auth/refresh", middleware.RateLimitByIPScoped("local-refresh", 60, time.Minute), local.Refresh)
+	api.POST("/local/recovery/reset", middleware.RateLimitByIPScoped("local-owner-recovery", 5, 15*time.Minute), local.ResetRecovery)
 	owner := api.Group("", local.RequireOwner())
 	owner.GET("/auth/me", local.Me)
 	owner.POST("/auth/logout", local.Logout)
 	owner.POST("/auth/password/change", authRate, local.ChangePassword)
+	owner.GET("/admin/local-recovery/status", local.RecoveryStatus)
+	owner.POST("/admin/local-recovery/rotate", authRate, local.RotateRecovery)
 	customers := &handler.CommercialCustomerHandler{Store: db}
 	owner.GET("/admin/commercial-customers", customers.List)
 	owner.GET("/admin/commercial-customers/:id", customers.Get)
@@ -124,16 +136,16 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	owner.PATCH("/admin/commercial-customers/:id", customers.Save)
 	requests := &handler.OfflineRequestHandler{Store: db}
 	owner.POST("/admin/offline-requests", requests.Import)
-	keyHandler := &handler.OfflineKeyHandler{Store: db, Keys: keys}
+	keyHandler := &handler.OfflineKeyHandler{Store: db, Keys: keys, ServicePassphrase: servicePassphrase}
 	owner.GET("/admin/offline-key/public", keyHandler.Public)
 	owner.POST("/admin/offline-key/create", authRate, keyHandler.Create)
 	owner.POST("/admin/offline-key/unlock", authRate, keyHandler.Unlock)
-	owner.POST("/admin/offline-key/lock", keyHandler.Lock)
+	owner.POST("/admin/offline-key/service-enable", authRate, keyHandler.EnableService)
 	owner.GET("/admin/offline-key/encrypted", keyHandler.ExportEncrypted)
 	owner.POST("/admin/offline-key/import/preview", authRate, keyHandler.ImportPreview)
 	owner.POST("/admin/offline-key/import", authRate, keyHandler.Import)
 	owner.POST("/admin/offline-key/recovery", authRate, keyHandler.Recovery)
-	issuance := &handler.OfflineLicenseHandler{Service: &service.OfflineIssuanceService{Store: db, Keys: keys, PreviewSecret: []byte(cfg.JWTSecret)}}
+	issuance := &handler.OfflineLicenseHandler{Service: &service.OfflineIssuanceService{Store: db, Keys: keys, PreviewSecret: []byte(cfg.JWTSecret), ServicePassphrase: servicePassphrase}}
 	owner.POST("/admin/offline-licenses/preview", issuance.Preview)
 	owner.POST("/admin/offline-licenses", issuance.Issue("initial"))
 	owner.POST("/admin/offline-licenses/:id/renew", issuance.Issue("renew"))
@@ -147,6 +159,7 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	owner.GET("/admin/overview", lifecycle.Overview)
 	owner.GET("/admin/offline-licenses", lifecycle.List)
 	owner.GET("/admin/offline-licenses/:id", lifecycle.Get)
+	owner.GET("/admin/offline-licenses/:id/code", issuance.Code)
 	owner.POST("/admin/offline-licenses/:id/issuance-state", lifecycle.State("license"))
 	owner.POST("/admin/commercial-customers/:id/issuance-state", lifecycle.State("customer"))
 	backups := &handler.OfflineBackupHandler{Service: &service.OfflineBackupService{Store: db, Keys: keys, DatabaseURL: cfg.DatabaseURL, DataDir: cfg.SnailDataDir, MigrationDir: "db/migrations", EncryptionSecret: cfg.ReleaseKeyEncryptionKey}, Gate: gate, Activate: activate}
@@ -162,26 +175,104 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	owner.GET("/admin/local-operations", backups.Operations)
 	serveFrontend(r)
 	r.NoRoute(func(c *gin.Context) { response.Err(c, 404, "NOT_FOUND", "此本地功能入口不存在") })
-	return r, func(ctx context.Context) error { keys.Lock(); return backups.Close(ctx) }
+	client := gin.New()
+	client.RedirectTrailingSlash = false
+	_ = client.SetTrustedProxies(nil)
+	client.Use(redactedRecovery(), middleware.RequestID(), func(c *gin.Context) {
+		c.Header(branding.HeaderKey, branding.Project)
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Next()
+	})
+	publicAPI := client.Group("/api/v1/client", gate.Middleware())
+	clientHandler := &handler.ClientActivationHandler{Service: &service.ClientActivationService{Store: db, Keys: keys}}
+	publicAPI.POST("/activate", middleware.RateLimitByIPScoped("snail-client-activate", 30, time.Minute), clientHandler.Activate)
+	publicAPI.POST("/sync", middleware.RateLimitByIPScoped("snail-client-sync", 60, time.Minute), clientHandler.Sync)
+	client.NoRoute(func(c *gin.Context) { response.Err(c, 404, "NOT_FOUND", "客户端服务入口不存在") })
+	return r, client, func(ctx context.Context) error { keys.Lock(); return backups.Close(ctx) }
 }
 func runLocalOffline(cfg *config.Config, db *store.Store, logger *slog.Logger) (resultErr error) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	managed := newLocalRouterSwitch(cfg, db, cancel)
 	defer func() { resultErr = errors.Join(resultErr, managed.Close()) }()
+	clientPort := cfg.SnailClientPort
+	if clientPort == "" {
+		clientPort = "9100"
+	}
+	if clientPort == cfg.Port {
+		return fmt.Errorf("SNAIL_CLIENT_PORT must differ from the management port")
+	}
 	server := &http.Server{Addr: "127.0.0.1:" + cfg.Port, Handler: managed, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
-	done := make(chan error, 1)
+	clientServer := &http.Server{Addr: "127.0.0.1:" + clientPort, Handler: managed.ClientHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	done := make(chan error, 2)
 	go func() { done <- server.ListenAndServe() }()
-	logger.Info("蜗牛客户与授权中心已启动", "address", cfg.BaseURL, "deployment", "local_offline")
+	go func() { done <- clientServer.ListenAndServe() }()
+	logger.Info("小云雀客户授权中心已启动", "management_address", cfg.BaseURL, "client_address", "http://127.0.0.1:"+clientPort, "deployment", "local_offline")
 	select {
 	case err := <-done:
 		if !errors.Is(err, http.ErrServerClosed) {
+			_ = server.Close()
+			_ = clientServer.Close()
 			return err
 		}
 	case <-ctx.Done():
 		shutdown, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
-		return server.Shutdown(shutdown)
+		return errors.Join(server.Shutdown(shutdown), clientServer.Shutdown(shutdown))
 	}
 	return nil
+}
+
+func initializeOfflineServiceIdentity(ctx context.Context, db *store.Store, keys *offline.KeyStore, master []byte) (string, error) {
+	passphrase, err := offline.ServicePassphrase(master)
+	if err != nil {
+		return "", err
+	}
+	physical, err := keys.Status()
+	if err != nil {
+		return "", err
+	}
+	expected, err := db.ExpectedSigningIdentity(ctx, physical)
+	if err != nil {
+		return "", err
+	}
+	if physical.State == "uncreated" {
+		return passphrase, nil
+	} else {
+		if _, err = keys.UnlockService(passphrase); err != nil {
+			// Existing user-protected identities stay in place until their
+			// owner completes the one-time service-signing migration.
+			err = nil
+		}
+	}
+	expected, err = db.ExpectedSigningIdentity(ctx, physical)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(expected)
+	if err != nil {
+		return "", err
+	}
+	_, settingErr := db.GetSetting(ctx, "snail_public_identity")
+	if settingErr != nil && !errors.Is(settingErr, sql.ErrNoRows) {
+		return "", settingErr
+	}
+	if errors.Is(settingErr, sql.ErrNoRows) {
+		err = store.RunInTx(ctx, db.DB, func(ctx context.Context, tx bun.Tx) error {
+			if _, err := tx.NewRaw("INSERT INTO offline_actors(id,display_name) VALUES(?,?) ON CONFLICT(id) DO NOTHING", store.SigningServiceActorID, "服务签发身份服务").Exec(ctx); err != nil {
+				return err
+			}
+			if _, err := tx.NewRaw("INSERT INTO settings(key,value) VALUES('snail_public_identity',?) ON CONFLICT(key) DO NOTHING", string(encoded)).Exec(ctx); err != nil {
+				return err
+			}
+			_, err := tx.NewInsert().Model(&model.AuditLog{ID: store.NewID(), Entity: "offline-signing-identity", EntityID: expected.KeyID, Action: "register-existing-identity", ActorID: store.SigningServiceActorID, ActorType: "service", Changes: map[string]any{"keyId": expected.KeyID}}).Exec(ctx)
+			return err
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	return passphrase, nil
 }

@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"github.com/tabloy/keygate/internal/auth"
 	keycrypto "github.com/tabloy/keygate/internal/crypto"
+	"github.com/tabloy/keygate/internal/model"
 	"github.com/tabloy/keygate/internal/offline"
 	"github.com/tabloy/keygate/internal/store"
 	"net/url"
@@ -526,8 +530,153 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Model the earlier T03/T07 schema with the same synthetic data. This is a
-	// schema-upgrade regression, not a customer migration/import product feature.
+	// These opaque signed bytes are unchanged TEST_ONLY fixtures from the
+	// 2026-10-23 schema baseline. Current parsers intentionally do not accept
+	// their MachineGuid protocol.
+	legacyRequest, err := os.ReadFile(filepath.Join("testdata", "source-07499ee-history", "TEST_ONLY.request-v2.snailreq"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyLicense, err := os.ReadFile(filepath.Join("testdata", "source-07499ee-history", "TEST_ONLY.license-v2.snaillic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestHash := sha256.Sum256(legacyRequest)
+	licenseHash := sha256.Sum256(legacyLicense)
+	if hex.EncodeToString(requestHash[:]) != "7ced1e9cbaed80ae0237fa658be64afe32c2ae3967e7f4ecef47d45d6653529d" || hex.EncodeToString(licenseHash[:]) != "f00cf2cac79761b04c6ce0df466cd54d7f0826662dd4db8cf47a81b173be05e1" {
+		t.Fatal("historical fixture bytes changed")
+	}
+	var request struct {
+		RequestID string `json:"requestId"`
+		ProductID string `json:"productId"`
+		Device    struct {
+			Type   string `json:"type"`
+			Digest string `json:"digest"`
+		} `json:"device"`
+		DeviceLabel string `json:"deviceLabel"`
+		AppVersion  string `json:"appVersion"`
+	}
+	if err = json.Unmarshal(legacyRequest, &request); err != nil {
+		t.Fatal(err)
+	}
+	var envelope struct {
+		PayloadB64 string `json:"payloadB64"`
+	}
+	if err = json.Unmarshal(legacyLicense, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	payloadRaw, err := base64.RawURLEncoding.Strict().DecodeString(envelope.PayloadB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		LicenseID  string `json:"licenseId"`
+		IssuanceID string `json:"issuanceId"`
+		CustomerID string `json:"customerId"`
+		Revision   int64  `json:"revision"`
+		IssuedAt   string `json:"issuedAt"`
+		NotBefore  string `json:"notBefore"`
+		ExpiresAt  string `json:"expiresAt"`
+		KeyID      string `json:"keyId"`
+		Binding    struct {
+			Type   string `json:"type"`
+			Digest string `json:"digest"`
+		} `json:"binding"`
+	}
+	if err = json.Unmarshal(payloadRaw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	readText := func(row store.BundleRow, column string) string {
+		var value string
+		_ = json.Unmarshal(row[column], &value)
+		return value
+	}
+	setValue := func(row store.BundleRow, column string, value any) {
+		raw, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		row[column] = raw
+	}
+	fixtureTime := func(value string) string {
+		parsed, parseErr := time.Parse("2006-01-02T15:04:05.000Z", value)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		return parsed.UTC().Format("2006-01-02T15:04:05-07:00")
+	}
+	findRow := func(table, column, value string) store.BundleRow {
+		t.Helper()
+		for _, row := range snapshot.Tables[table] {
+			if readText(row, column) == value {
+				return row
+			}
+		}
+		t.Fatalf("snapshot %s row %s=%q not found", table, column, value)
+		return nil
+	}
+	licenseRow := findRow("licenses", "id", first.LicenseID)
+	customerID := readText(licenseRow, "customer_id")
+	issuanceRow := findRow("license_issuances", "id", first.IssuanceID)
+	requestID := readText(issuanceRow, "request_id")
+	requestRow := findRow("offline_requests", "request_id", requestID)
+	bindingID := readText(issuanceRow, "binding_id")
+	bindingRow := findRow("offline_device_bindings", "id", bindingID)
+	setValue(findRow("commercial_customers", "id", customerID), "id", payload.CustomerID)
+	setValue(licenseRow, "id", payload.LicenseID)
+	setValue(licenseRow, "customer_id", payload.CustomerID)
+	setValue(licenseRow, "current_revision", payload.Revision)
+	setValue(licenseRow, "current_issuance_id", payload.IssuanceID)
+	setValue(licenseRow, "valid_from", fixtureTime(payload.NotBefore))
+	setValue(licenseRow, "valid_until", fixtureTime(payload.ExpiresAt))
+	setValue(licenseRow, "created_at", fixtureTime(payload.IssuedAt))
+	setValue(licenseRow, "updated_at", fixtureTime(payload.IssuedAt))
+	setValue(bindingRow, "license_id", payload.LicenseID)
+	setValue(bindingRow, "device_type", payload.Binding.Type)
+	setValue(bindingRow, "device_digest", payload.Binding.Digest)
+	setValue(bindingRow, "device_label", request.DeviceLabel)
+	setValue(bindingRow, "registered_at", fixtureTime(payload.IssuedAt))
+	setValue(requestRow, "request_id", request.RequestID)
+	setValue(requestRow, "product_code", request.ProductID)
+	setValue(requestRow, "device_type", request.Device.Type)
+	setValue(requestRow, "device_digest", request.Device.Digest)
+	setValue(requestRow, "device_label", request.DeviceLabel)
+	setValue(requestRow, "raw_bytes", `\x`+hex.EncodeToString(legacyRequest))
+	setValue(requestRow, "created_at", fixtureTime(payload.IssuedAt))
+	// This is ParseRequest's historical canonical JSON fingerprint from the
+	// source baseline, not a value produced by the current SMBIOS parser.
+	setValue(requestRow, "fingerprint", "0d93051629a8b9973db3bff33722d116c94cc92d22192a872c85f4cb95576ac4")
+	setValue(issuanceRow, "id", payload.IssuanceID)
+	setValue(issuanceRow, "license_id", payload.LicenseID)
+	setValue(issuanceRow, "revision", payload.Revision)
+	setValue(issuanceRow, "request_id", request.RequestID)
+	setValue(issuanceRow, "key_id", payload.KeyID)
+	setValue(issuanceRow, "not_before", fixtureTime(payload.NotBefore))
+	setValue(issuanceRow, "expires_at", fixtureTime(payload.ExpiresAt))
+	setValue(issuanceRow, "issued_at", fixtureTime(payload.IssuedAt))
+	setValue(issuanceRow, "created_at", fixtureTime(payload.IssuedAt))
+	setValue(issuanceRow, "raw_bytes", `\x`+hex.EncodeToString(legacyLicense))
+	setValue(issuanceRow, "sha256", hex.EncodeToString(licenseHash[:]))
+	for _, audit := range snapshot.Tables["audit_logs"] {
+		if readText(audit, "entity") == "offline-license" && readText(audit, "entity_id") == first.LicenseID {
+			setValue(audit, "entity_id", payload.LicenseID)
+		}
+	}
+	var sourceLicense model.License
+	if err = source.Store.DB.NewSelect().Model(&sourceLicense).Where("id=?", first.LicenseID).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	plainCode := source.Store.DecryptLicenseKey(&sourceLicense)
+	if plainCode == "" || source.Store.LicenseKeyAEAD == nil {
+		t.Fatal("test license key unavailable for fixture remapping")
+	}
+	encryptedCode, err := source.Store.LicenseKeyAEAD.Encrypt([]byte(plainCode), []byte(payload.LicenseID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setValue(licenseRow, "license_key_encrypted", `\x`+hex.EncodeToString(encryptedCode))
+	// Use the actual 2026-10-23 schema: drop fields introduced by later migrations
+	// based on that isolated database's installed column catalog.
 	delete(snapshot.Tables, "offline_actors")
 	history := snapshot.Tables["schema_migrations"][:0]
 	for _, row := range snapshot.Tables["schema_migrations"] {
@@ -556,10 +705,33 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 		}
 	}
 	previous := emptySnapshotTarget(t, previousDir)
+	var oldColumns []struct {
+		Table  string `bun:"table_name"`
+		Column string `bun:"column_name"`
+	}
+	if err = previous.DB.NewRaw("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public'").Scan(ctx, &oldColumns); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]map[string]bool{}
+	for _, column := range oldColumns {
+		if allowed[column.Table] == nil {
+			allowed[column.Table] = map[string]bool{}
+		}
+		allowed[column.Table][column.Column] = true
+	}
+	for table, rows := range snapshot.Tables {
+		for _, row := range rows {
+			for column := range row {
+				if !allowed[table][column] {
+					delete(row, column)
+				}
+			}
+		}
+	}
 	if err = previous.RestoreSnapshot(ctx, snapshot); err != nil {
 		t.Fatal(err)
 	}
-	before, err := previous.LicenseIssuance(ctx, first.IssuanceID)
+	before, err := previous.LicenseIssuance(ctx, payload.IssuanceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,9 +742,16 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 	if err = previous.DB.NewRaw("SELECT display_name FROM offline_actors WHERE id=?", actor).Scan(ctx, &name); err != nil || name != "service_owner" {
 		t.Fatal("actor backfill", name, err)
 	}
-	after, err := previous.LicenseIssuance(ctx, first.IssuanceID)
+	after, err := previous.LicenseIssuance(ctx, payload.IssuanceID)
 	if err != nil || !bytes.Equal(before.RawBytes, after.RawBytes) || before.SHA256 != after.SHA256 || before.CreatedBy != after.CreatedBy {
 		t.Fatal("upgrade changed signed original or provenance", err)
+	}
+	if !bytes.Equal(after.RawBytes, legacyLicense) || after.SHA256 != hex.EncodeToString(licenseHash[:]) || after.CreatedBy != actor {
+		t.Fatal("upgrade did not retain the exact historical signed original and creator")
+	}
+	var restoredRequest model.OfflineRequest
+	if err = previous.DB.NewSelect().Model(&restoredRequest).Where("request_id=?", request.RequestID).Scan(ctx); err != nil || !bytes.Equal(restoredRequest.RawBytes, legacyRequest) {
+		t.Fatal("upgrade changed the historical request original", err)
 	}
 }
 func TestOfflineEncryptedBackupPreviewAndFailureProtection(t *testing.T) {

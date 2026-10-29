@@ -3,59 +3,53 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { localDownload, localRequest } from "@/lib/local-offline-api"
-import { DeliveryForm, type Issued } from "./local-issue"
+import { localRequest } from "@/lib/local-offline-api"
 import IssuanceStateForm from "./local-state-form"
 export type OfflineLicense = {
   id: string
+  customerNumber: string
+  licenseNumber: string
   displayNumber: string
   customerId: string
   customerName: string
-  deviceLabel: string
-  deviceDigest: string
-  notBefore: string
+  contactMethod: string
+  devices: Device[]
+  deviceLimit: number
+  term?: {
+    kind: "days" | "months" | "years" | "date" | "perpetual"
+    amount?: number
+    endDate?: string
+    startsAt?: string
+  }
+  notBefore: string | null
   expiresAt: string | null
   revision: number
-  issuanceId: string
-  keyId: string
-  sha256: string
-  fileName: string
-  termState: "not_yet_valid" | "valid" | "expired" | "perpetual"
-  deliveryState: "pending" | "recorded"
+  termState: "unactivated" | "not_yet_valid" | "valid" | "expired" | "perpetual"
   issuanceEnabled: boolean
   customerIssuanceEnabled: boolean
-  usageState: "unreported"
-  deliveryMethod: string
-  deliveryRecipient: string
-  deliveredAt: string | null
 }
 type Issuance = {
   id: string
   revision: number
   kind: string
-  fileName: string
-  sha256: string
   notBefore: string
   expiresAt: string | null
   issuedAt: string
 }
-type Binding = {
-  id: string
+type Device = {
+  bindingId: string
   deviceLabel: string
-  deviceDigest: string
-  registeredAt: string
-  supersededAt: string | null
+  deviceState: "current" | "transferred"
+  appVersion: string
+  buildId: string
+  lastReportedAt: string | null
 }
-type Delivery = {
-  id: string
-  issuanceId: string
-  method: string
-  recipient: string
-  deliveredAt: string
-  notes: string
+const terms = { unactivated: "未激活", not_yet_valid: "待生效", valid: "使用中", expired: "已到期", perpetual: "永久" }
+const termText = (term: NonNullable<OfflineLicense["term"]>) => {
+  if (term.kind === "perpetual") return "永久"
+  if (term.kind === "date") return `有效至 ${term.endDate}`
+  return `${term.amount}${{ days: "天", months: "个月", years: "年" }[term.kind]}`
 }
-const terms = { not_yet_valid: "未生效", valid: "有效", expired: "已到期", perpetual: "永久" }
-const methods: Record<string, string> = { wechat: "微信", email: "邮件", usb: "U盘", other: "其他" }
 const dateText = (value: string | null) =>
   value === null
     ? "永久"
@@ -65,38 +59,23 @@ const dateText = (value: string | null) =>
         timeStyle: "short",
         hour12: false,
       }).format(new Date(value))
-const issued = (row: OfflineLicense): Issued => ({
-  licenseId: row.id,
-  issuanceId: row.issuanceId,
-  revision: row.revision,
-  sha256: row.sha256,
-  fileName: row.fileName,
-  keyId: row.keyId,
-  notBefore: row.notBefore,
-  expiresAt: row.expiresAt,
-  replayed: true,
-})
-export type LicenseAction = (row: OfflineLicense, action: "renew" | "transfer") => void
+export type LicenseAction = (row: OfflineLicense, action: "renew" | "transfer", bindingId?: string) => void
 
 export default function LocalLicenses({
-  delivery = false,
   customerId,
   compact = false,
   initialExpiring = false,
   initialTermState = "",
-  initialDeliveryState = "",
   title,
   epoch = 0,
   onCreate,
   onManage,
   onChanged,
 }: {
-  delivery?: boolean
   customerId?: string
   compact?: boolean
   initialExpiring?: boolean
   initialTermState?: string
-  initialDeliveryState?: string
   title?: string
   epoch?: number
   onCreate?: () => void
@@ -108,7 +87,6 @@ export default function LocalLicenses({
     [query, setQuery] = useState(""),
     [submitted, setSubmitted] = useState("")
   const [term, setTerm] = useState(initialTermState),
-    [deliveryState, setDelivery] = useState(initialDeliveryState),
     [page, setPage] = useState(1),
     [reload, setReload] = useState(0),
     [error, setError] = useState(""),
@@ -121,11 +99,10 @@ export default function LocalLicenses({
     const params = new URLSearchParams({
       q: submitted,
       termState: term,
-      deliveryState,
       page: String(page),
       pageSize: compact ? "5" : "20",
       ...(customerId ? { customerId } : {}),
-      ...(initialExpiring ? { expiring: "30" } : {}),
+      ...(initialExpiring ? { expiring: "15d" } : {}),
     })
     localRequest<{ items: OfflineLicense[]; total: number }>(`/admin/offline-licenses?${params}`)
       .then((value) => {
@@ -144,12 +121,12 @@ export default function LocalLicenses({
     return () => {
       alive = false
     }
-  }, [submitted, term, deliveryState, page, reload, customerId, initialExpiring, compact, epoch])
+  }, [submitted, term, page, reload, customerId, initialExpiring, compact, epoch])
   return (
     <section className={compact ? "lc-list-page lc-compact-list" : "lc-list-page"}>
       {!compact && (
         <div className="lc-page-heading">
-          <h1>{title || (delivery ? "交付记录" : "授权")}</h1>
+          <h1>{title || "授权"}</h1>
           {onCreate && <Button onClick={onCreate}>发放授权</Button>}
         </div>
       )}
@@ -173,7 +150,7 @@ export default function LocalLicenses({
               <Input
                 className="w-72"
                 aria-label="查询授权"
-                placeholder="客户、授权编号、设备或来源"
+                placeholder="客户、客户编号、授权编号、联系方式或设备"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -187,63 +164,37 @@ export default function LocalLicenses({
           </Button>
           {!compact && (
             <div className="flex flex-wrap gap-2">
-              {!delivery && (
-                <select
-                  aria-label="期限状态"
-                  className="h-9 rounded-md border border-input px-3"
-                  value={term}
-                  onChange={(event) => {
-                    setTerm(event.target.value)
-                    setPage(1)
-                  }}
-                >
-                  <option value="">全部期限</option>
-                  <option value="active">有效（含永久）</option>
-                  {Object.entries(terms).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              )}
               <select
-                aria-label="交付状态"
+                aria-label="期限状态"
                 className="h-9 rounded-md border border-input px-3"
-                value={deliveryState}
+                value={term}
                 onChange={(event) => {
-                  setDelivery(event.target.value)
+                  setTerm(event.target.value)
                   setPage(1)
                 }}
               >
-                <option value="">全部交付</option>
-                <option value="pending">待交付</option>
-                <option value="recorded">已登记交付</option>
+                <option value="">全部期限</option>
+                <option value="active">有效（含永久）</option>
+                {Object.entries(terms).map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
               </select>
-              {initialExpiring && <span className="self-center text-sm">30天内到期</span>}
+              {initialExpiring && <span className="self-center text-sm">未来15天内</span>}
             </div>
           )}
         </div>
         <div className="overflow-x-auto">
-          <Table className={compact ? "lc-compact-table" : delivery ? "lc-delivery-table" : "lc-license-table"}>
+          <Table className={compact ? "lc-compact-table" : "lc-license-table"}>
             <TableHeader>
               <TableRow>
                 <TableHead>客户／授权编号</TableHead>
-                {!compact && !delivery && <TableHead>绑定设备</TableHead>}
-                {!delivery && (
-                  <>
-                    <TableHead>期限状态</TableHead>
-                    <TableHead>截止时间</TableHead>
-                  </>
-                )}
-                <TableHead>交付状态</TableHead>
-                {delivery && (
-                  <>
-                    <TableHead>交付方式</TableHead>
-                    <TableHead>收件对象</TableHead>
-                    <TableHead>交付时间</TableHead>
-                  </>
-                )}
-                {!compact && !delivery && <TableHead>续发</TableHead>}
+                {!compact && <TableHead>绑定设备</TableHead>}
+                <TableHead>期限状态</TableHead>
+                <TableHead>截止时间</TableHead>
+                <TableHead>设备状态</TableHead>
+                {!compact && <TableHead>续发</TableHead>}
                 <TableHead>操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -252,51 +203,33 @@ export default function LocalLicenses({
                 <TableRow key={row.id}>
                   <TableCell>
                     <span className="lc-license-customer">{row.customerName}</span>
-                    <span className="lc-record-number">{row.displayNumber}</span>
+                    <span className="lc-record-number">{row.customerNumber}</span>
+                    <span className="lc-record-number">{row.licenseNumber || row.displayNumber}</span>
                   </TableCell>
-                  {!compact && !delivery && <TableCell>{row.deviceLabel || "申请设备"}</TableCell>}
-                  {!delivery && (
-                    <>
-                      <TableCell>
-                        <span className={`lc-status lc-status-${row.termState}`}>{terms[row.termState]}</span>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">{dateText(row.expiresAt)}</TableCell>
-                    </>
+                  {!compact && (
+                    <TableCell>
+                      {row.devices
+                        ?.filter((device) => device.deviceState === "current")
+                        .map((device) => device.deviceLabel || "已登记设备")
+                        .join("、") || "未激活"}
+                    </TableCell>
                   )}
                   <TableCell>
-                    <span className={`lc-status lc-status-${row.deliveryState}`}>
-                      {row.deliveryState === "recorded" ? "已登记交付" : "待交付"}
-                    </span>
+                    <span className={`lc-status lc-status-${row.termState}`}>{terms[row.termState]}</span>
                   </TableCell>
-                  {delivery && (
-                    <>
-                      <TableCell>{methods[row.deliveryMethod] || "—"}</TableCell>
-                      <TableCell>{row.deliveryRecipient || "—"}</TableCell>
-                      <TableCell>{row.deliveredAt ? dateText(row.deliveredAt) : "—"}</TableCell>
-                    </>
-                  )}
-                  {!compact && !delivery && (
+                  <TableCell className="whitespace-nowrap">
+                    {row.termState === "unactivated" ? "首次激活后起算" : dateText(row.expiresAt)}
+                  </TableCell>
+                  <TableCell>
+                    {row.devices?.some((device) => device.deviceState === "current") ? "已绑定" : "未激活"}
+                  </TableCell>
+                  {!compact && (
                     <TableCell>{row.issuanceEnabled && row.customerIssuanceEnabled ? "可续发" : "已停发"}</TableCell>
                   )}
                   <TableCell>
                     <div className="lc-row-actions">
-                      {delivery && (
-                        <Button
-                          variant="link"
-                          size="sm"
-                          onClick={async () => {
-                            try {
-                              await localDownload(`/admin/license-issuances/${row.issuanceId}/file`, row.fileName)
-                            } catch (cause) {
-                              setError((cause as Error).message)
-                            }
-                          }}
-                        >
-                          下载原件
-                        </Button>
-                      )}
                       <Button variant="link" size="sm" onClick={() => setSelected(row.id)}>
-                        {delivery ? (row.deliveryState === "pending" ? "登记交付" : "查看记录") : "查看详情"}
+                        查看详情
                       </Button>
                     </div>
                   </TableCell>
@@ -304,9 +237,9 @@ export default function LocalLicenses({
               ))}
               {!items.length && (
                 <TableRow>
-                  <TableCell colSpan={compact ? 5 : delivery ? 6 : 7}>
+                  <TableCell colSpan={compact ? 5 : 7}>
                     <div className="lc-empty" role="status">
-                      {busy ? "正在读取授权…" : error ? "授权未能读取" : delivery ? "暂无交付记录" : "暂无授权"}
+                      {busy ? "正在读取授权…" : error ? "授权未能读取" : "暂无授权"}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -316,9 +249,7 @@ export default function LocalLicenses({
         </div>
         {!compact && (
           <div className="lc-pagination">
-            <span>
-              共 {total} 份{delivery ? "原件" : "授权"}
-            </span>
+            <span>共 {total} 份授权</span>
             {total > 20 && (
               <div>
                 <Button
@@ -356,9 +287,9 @@ export default function LocalLicenses({
           }}
           onManage={
             onManage
-              ? (row, action) => {
+              ? (row, action, bindingId) => {
                   setSelected(null)
-                  onManage(row, action)
+                  onManage(row, action, bindingId)
                 }
               : undefined
           }
@@ -381,11 +312,12 @@ function LicenseDetails({
   const [data, setData] = useState<{
       license: OfflineLicense
       issuances: Issuance[]
-      bindings: Binding[]
-      deliveries: Delivery[]
     } | null>(null),
     [error, setError] = useState(""),
-    [reload, setReload] = useState(0)
+    [reload, setReload] = useState(0),
+    [licenseCode, setLicenseCode] = useState<string | null>(null),
+    [codeVisible, setCodeVisible] = useState(false),
+    [codeBusy, setCodeBusy] = useState(false)
   // biome-ignore lint/correctness/useExhaustiveDependencies: reload refreshes details after a lifecycle or delivery operation.
   useEffect(() => {
     let alive = true
@@ -403,17 +335,33 @@ function LicenseDetails({
       alive = false
     }
   }, [id, reload])
-  async function download(issuance: Issuance | Issued) {
+  async function toggleCode() {
+    if (codeVisible) {
+      setCodeVisible(false)
+      return
+    }
+    setCodeBusy(true)
     try {
-      await localDownload(
-        `/admin/license-issuances/${"issuanceId" in issuance ? issuance.issuanceId : issuance.id}/file`,
-        issuance.fileName,
-      )
+      const value = await localRequest<{ licenseCode: string }>(`/admin/offline-licenses/${id}/code`)
+      setLicenseCode(value.licenseCode)
+      setCodeVisible(true)
+    } catch (cause) {
+      setError((cause as Error).message)
+    } finally {
+      setCodeBusy(false)
+    }
+  }
+  async function copyCode() {
+    if (!licenseCode) return
+    try {
+      await navigator.clipboard.writeText(licenseCode)
+      setError("")
     } catch (cause) {
       setError((cause as Error).message)
     }
   }
   const row = data?.license
+  const devices = row?.devices ?? []
   return (
     <Sheet
       open
@@ -434,42 +382,41 @@ function LicenseDetails({
               <dl className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
                 <dt>客户</dt>
                 <dd>{row.customerName}</dd>
+                <dt>客户编号</dt>
+                <dd>{row.customerNumber}</dd>
                 <dt>授权编号</dt>
-                <dd>{row.displayNumber}</dd>
+                <dd>{row.licenseNumber || row.displayNumber}</dd>
                 <dt>期限状态</dt>
                 <dd>{terms[row.termState]}</dd>
+                <dt>授权期限</dt>
+                <dd>{row.term ? termText(row.term) : row.termState === "perpetual" ? "永久" : "—"}</dd>
                 <dt>生效时间</dt>
-                <dd>{dateText(row.notBefore)}</dd>
+                <dd>{row.notBefore ? dateText(row.notBefore) : "首次成功激活时起算"}</dd>
                 <dt>截止时间</dt>
-                <dd>{dateText(row.expiresAt)}</dd>
+                <dd>{row.termState === "unactivated" ? "首次激活后按授权期限计算" : dateText(row.expiresAt)}</dd>
+                <dt>设备数量</dt>
+                <dd>{row.deviceLimit} 台</dd>
                 <dt>当前版本</dt>
                 <dd>{row.revision}</dd>
-                <dt>交付状态</dt>
-                <dd>{row.deliveryState === "recorded" ? "已登记交付" : "待交付"}</dd>
-                <dt>离线使用</dt>
-                <dd>未回传</dd>
-                <dt>设备码</dt>
-                <dd className="break-all">STQ-WIN1-{row.deviceDigest}</dd>
               </dl>
               <div className="flex gap-3">
-                <Button onClick={() => void download(issued(row))}>下载当前原件</Button>
+                <Button variant="outline" disabled={codeBusy} onClick={() => void toggleCode()}>
+                  {codeBusy ? "正在读取…" : codeVisible ? "隐藏授权码" : "显示授权码"}
+                </Button>
+                {codeVisible && <Button onClick={() => void copyCode()}>复制授权码</Button>}
                 {onManage && (
-                  <>
-                    <Button
-                      variant="outline"
-                      disabled={row.expiresAt === null || !row.issuanceEnabled || !row.customerIssuanceEnabled}
-                      onClick={() => onManage(row, "renew")}
-                    >
-                      续期
-                    </Button>
-                    <Button
-                      variant="outline"
-                      disabled={row.termState === "expired" || !row.issuanceEnabled || !row.customerIssuanceEnabled}
-                      onClick={() => onManage(row, "transfer")}
-                    >
-                      换机
-                    </Button>
-                  </>
+                  <Button
+                    variant="outline"
+                    disabled={
+                      row.termState === "unactivated" ||
+                      row.expiresAt === null ||
+                      !row.issuanceEnabled ||
+                      !row.customerIssuanceEnabled
+                    }
+                    onClick={() => onManage(row, "renew")}
+                  >
+                    续期
+                  </Button>
                 )}
               </div>
               <IssuanceStateForm
@@ -482,15 +429,6 @@ function LicenseDetails({
                   onChanged?.()
                 }}
               />
-              {row.deliveryState === "pending" && (
-                <DeliveryForm
-                  issuance={issued(row)}
-                  onRecorded={() => {
-                    setReload((value) => value + 1)
-                    onChanged?.()
-                  }}
-                />
-              )}
               <section className="grid gap-3">
                 <h3 className="font-semibold">历次签发</h3>
                 <Table>
@@ -499,7 +437,6 @@ function LicenseDetails({
                       <TableHead>版本</TableHead>
                       <TableHead>动作</TableHead>
                       <TableHead>签发时间</TableHead>
-                      <TableHead>原件</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -510,42 +447,10 @@ function LicenseDetails({
                           {{ initial: "首次签发", renew: "续期", transfer: "换机" }[value.kind] || value.kind}
                         </TableCell>
                         <TableCell>{dateText(value.issuedAt)}</TableCell>
-                        <TableCell>
-                          <Button variant="outline" size="sm" onClick={() => void download(value)}>
-                            下载原件
-                          </Button>
-                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-              </section>
-              <section className="grid gap-3">
-                <h3 className="font-semibold">交付记录</h3>
-                {data.deliveries.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>方式</TableHead>
-                        <TableHead>收件对象</TableHead>
-                        <TableHead>时间</TableHead>
-                        <TableHead>备注</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.deliveries.map((value) => (
-                        <TableRow key={value.id}>
-                          <TableCell>{methods[value.method]}</TableCell>
-                          <TableCell>{value.recipient}</TableCell>
-                          <TableCell>{dateText(value.deliveredAt)}</TableCell>
-                          <TableCell>{value.notes || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                ) : (
-                  <span className="text-sm text-muted-foreground">暂无交付记录</span>
-                )}
               </section>
               <section className="grid gap-3">
                 <h3 className="font-semibold">设备记录</h3>
@@ -553,18 +458,44 @@ function LicenseDetails({
                   <TableHeader>
                     <TableRow>
                       <TableHead>设备名称</TableHead>
-                      <TableHead>登记时间</TableHead>
+                      <TableHead>客户端版本</TableHead>
+                      <TableHead>最近上报</TableHead>
                       <TableHead>状态</TableHead>
+                      {onManage && <TableHead>操作</TableHead>}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.bindings.map((value) => (
-                      <TableRow key={value.id}>
-                        <TableCell>{value.deviceLabel || "申请设备"}</TableCell>
-                        <TableCell>{dateText(value.registeredAt)}</TableCell>
-                        <TableCell>{value.supersededAt ? "已替换绑定" : "当前登记"}</TableCell>
+                    {devices.map((value) => (
+                      <TableRow key={value.bindingId}>
+                        <TableCell>{value.deviceLabel || "未命名设备"}</TableCell>
+                        <TableCell>
+                          {[value.appVersion, value.buildId].filter(Boolean).join(" · ") || "尚未上报"}
+                        </TableCell>
+                        <TableCell>{value.lastReportedAt ? dateText(value.lastReportedAt) : "尚未上报"}</TableCell>
+                        <TableCell>{value.deviceState === "current" ? "当前设备" : "已换机"}</TableCell>
+                        {onManage && (
+                          <TableCell>
+                            {value.deviceState === "current" && row.termState !== "expired" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={!row.issuanceEnabled || !row.customerIssuanceEnabled}
+                                onClick={() => onManage(row, "transfer", value.bindingId)}
+                              >
+                                办理换机
+                              </Button>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
+                    {!devices.length && (
+                      <TableRow>
+                        <TableCell colSpan={onManage ? 5 : 4} className="text-muted-foreground">
+                          尚未绑定设备
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </section>

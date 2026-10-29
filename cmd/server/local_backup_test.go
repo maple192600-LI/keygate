@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"github.com/tabloy/keygate/internal/config"
+	"github.com/tabloy/keygate/internal/offline"
 	"github.com/tabloy/keygate/internal/service"
+	"github.com/tabloy/keygate/internal/store"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -58,6 +61,7 @@ func (a *localTestApp) upload(t *testing.T, path string, raw []byte, password st
 }
 func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T) {
 	s := localTestStore(t)
+	targetStore := localTestStore(t)
 	t.Chdir("../..")
 	server := httptest.NewUnstartedServer(nil)
 	address := server.Listener.Addr().String()
@@ -127,9 +131,19 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	customer := decodeLocal[struct {
 		ID string `json:"id"`
 	}](t, body)
-	status, body = a.call(t, "POST", "/api/v1/admin/offline-key/create", map[string]string{"ownerPassword": ownerPassword, "passphrase": "Synthetic-restored-signing-password"})
-	if status != 201 {
-		t.Fatalf("key %d %s", status, body)
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("fresh signing identity status %d %s", status, body)
+	}
+	freshIdentity := decodeLocal[struct {
+		Identity struct {
+			KeyID        string `json:"keyId"`
+			PublicKeyPEM string `json:"publicKeyPem"`
+		} `json:"identity"`
+		AutomaticSigning bool `json:"automaticSigning"`
+	}](t, body)
+	if !freshIdentity.AutomaticSigning || freshIdentity.Identity.KeyID != "" || freshIdentity.Identity.PublicKeyPEM != "" {
+		t.Fatalf("a fresh target registered an unused signing identity before issuance: %+v", freshIdentity)
 	}
 	status, body = a.call(t, "POST", "/api/v1/admin/offline-requests", map[string]string{"deviceCode": "STQ-WIN1-" + strings.Repeat("a", 64), "deviceLabel": "合成恢复设备"})
 	if status != 200 {
@@ -152,8 +166,89 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	if status != 200 {
 		t.Fatalf("issue %d %s", status, body)
 	}
-	parsedURL, _ := url.Parse(server.URL)
-	oldCookies := a.client.Jar.Cookies(parsedURL)
+	onlineIntent := service.OfflineIntent{Action: "initial", CustomerID: customer.ID, DeviceLimit: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", onlineIntent)
+	if status != 200 {
+		t.Fatalf("online code preview %d %s", status, body)
+	}
+	onlinePreview := decodeLocal[service.OfflinePreview](t, body)
+	onlineCommand := service.OfflineIssueCommand{OfflineIntent: onlineIntent, OperationID: "761d5883-cec0-4e35-9aa6-4d0717b3adbc", PreviewBase: onlinePreview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses", onlineCommand)
+	if status != 200 {
+		t.Fatalf("online code issue %d %s", status, body)
+	}
+	onlineLicense := decodeLocal[service.OfflineIssueResult](t, body)
+	if onlineLicense.LicenseID == "" || onlineLicense.LicenseCode == "" || onlineLicense.Revision != 0 {
+		t.Fatalf("online code was not preserved unactivated: %+v", onlineLicense)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses/"+onlineLicense.LicenseID, nil)
+	if status != 200 {
+		t.Fatalf("unactivated online license detail %d %s", status, body)
+	}
+	unactivated := decodeLocal[struct {
+		License struct {
+			Revision  int64   `json:"revision"`
+			TermState string  `json:"termState"`
+			NotBefore *string `json:"notBefore"`
+			ExpiresAt *string `json:"expiresAt"`
+		} `json:"license"`
+	}](t, body).License
+	if unactivated.Revision != 0 || unactivated.TermState != "unactivated" || unactivated.NotBefore != nil || unactivated.ExpiresAt != nil {
+		t.Fatalf("unactivated code showed a fabricated start or deadline: %+v", unactivated)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic signing identity after first issuance %d %s", status, body)
+	}
+	identityBeforeRestore := decodeLocal[struct {
+		Identity struct {
+			KeyID        string `json:"keyId"`
+			PublicKeyPEM string `json:"publicKeyPem"`
+		} `json:"identity"`
+		AutomaticSigning bool `json:"automaticSigning"`
+	}](t, body)
+	if !identityBeforeRestore.AutomaticSigning || identityBeforeRestore.Identity.KeyID == "" || identityBeforeRestore.Identity.PublicKeyPEM == "" {
+		t.Fatalf("automatic signing identity was not established at first issuance: %+v", identityBeforeRestore)
+	}
+	businessRaw, err := s.ExportBusinessBundle(context.Background(), offline.PublicIdentity{KeyID: identityBeforeRestore.Identity.KeyID, PublicKeyPEM: identityBeforeRestore.Identity.PublicKeyPEM, State: "public"})
+	if err != nil {
+		t.Fatalf("export with unactivated online code %v", err)
+	}
+	for _, malformed := range []string{"current-pointer", "deadline", "binding"} {
+		bundle, parseErr := store.ParseBusinessBundle(businessRaw)
+		if parseErr != nil {
+			t.Fatalf("parse exported unactivated bundle: %v", parseErr)
+		}
+		var licenseRow store.BundleRow
+		for _, row := range bundle.Tables["licenses"] {
+			var id string
+			_ = json.Unmarshal(row["id"], &id)
+			if id == onlineLicense.LicenseID {
+				licenseRow = row
+				break
+			}
+		}
+		if licenseRow == nil {
+			t.Fatal("unactivated license missing from business bundle")
+		}
+		switch malformed {
+		case "current-pointer":
+			licenseRow["current_issuance_id"], _ = json.Marshal(store.NewID())
+		case "deadline":
+			licenseRow["valid_until"], _ = json.Marshal("2026-11-05T00:00:00Z")
+		case "binding":
+			binding := store.BundleRow{}
+			for key, value := range bundle.Tables["offline_device_bindings"][0] {
+				binding[key] = append(json.RawMessage(nil), value...)
+			}
+			binding["id"], _ = json.Marshal(store.NewID())
+			binding["license_id"], _ = json.Marshal(onlineLicense.LicenseID)
+			bundle.Tables["offline_device_bindings"] = append(bundle.Tables["offline_device_bindings"], binding)
+		}
+		if err = store.ValidateBusinessBundle(bundle); err == nil {
+			t.Fatalf("unactivated license accepted malformed %s state", malformed)
+		}
+	}
 	status, archive := a.call(t, "POST", "/api/v1/admin/backups", map[string]any{"password": backupPassword, "includeIdentity": true, "confirmIdentity": true})
 	if status != 200 {
 		t.Fatalf("backup %d %s", status, archive)
@@ -216,26 +311,199 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	if err = os.WriteFile(runtimeFile, initial, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if status, body = a.call(t, "POST", "/api/v1/admin/backups/restore", confirm); status != 200 {
-		t.Fatalf("confirm %d %s", status, body)
+	if status, body = a.call(t, "POST", "/api/v1/admin/data-previews/cancel", map[string]string{"previewId": restore.ID}); status != 200 {
+		t.Fatalf("cancel source-side restore candidate %d %s", status, body)
 	}
-	if status, _ = a.call(t, "GET", "/api/v1/auth/me", nil); status != 401 {
-		t.Fatal("old current session survived restored database")
+	// Stop the source listener before the restored environment accepts writes.
+	server.Close()
+
+	targetServer := httptest.NewUnstartedServer(nil)
+	targetAddress := targetServer.Listener.Addr().String()
+	_, targetPort, _ := strings.Cut(targetAddress, ":")
+	targetDataRoot := t.TempDir()
+	targetDSN, err := url.Parse(os.Getenv("SNAIL_LOCAL_TEST_DSN"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	oldJar, _ := cookiejar.New(nil)
-	oldJar.SetCookies(parsedURL, oldCookies)
-	oldClient := &localTestApp{server: server, client: &http.Client{Jar: oldJar}}
-	if status, _ = oldClient.call(t, "POST", "/api/v1/auth/refresh", nil); status != 401 {
-		t.Fatal("backed-up refresh session survived restore")
+	var targetDBName string
+	if err = targetStore.DB.NewRaw("SELECT current_database()").Scan(context.Background(), &targetDBName); err != nil {
+		t.Fatal(err)
 	}
-	// The archived password is restored, not the newer source password.
-	if status, _ = a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "restore_owner", "password": newPassword}); status != 401 {
-		t.Fatal("source password leaked across restore")
+	targetDSN.Path = "/" + targetDBName
+	targetCfg := &config.Config{Port: targetPort, BaseURL: "http://" + targetAddress, Environment: "production", SnailDeployment: "local_offline", SnailDataDir: targetDataRoot, SnailRuntimeToken: strings.Repeat("8", 64), JWTSecret: strings.Repeat("7", 64), ReleaseKeyEncryptionKey: strings.Repeat("6", 64), DatabaseURL: targetDSN.String()}
+	targetRuntime := map[string]any{"formatVersion": 1, "databasePassword": strings.Repeat("5", 64), "databasePort": 55440, "appPort": 9001, "jwtSecret": targetCfg.JWTSecret, "encryptionSecret": targetCfg.ReleaseKeyEncryptionKey}
+	targetRuntimeRaw, _ := json.Marshal(targetRuntime)
+	targetRuntimeDigest := sha256.Sum256(targetRuntimeRaw)
+	targetCfg.SnailRuntimeConfigSHA256 = hex.EncodeToString(targetRuntimeDigest[:])
+	targetRuntimeFile := filepath.Join(targetDataRoot, "runtime.json")
+	if err = os.WriteFile(targetRuntimeFile, targetRuntimeRaw, 0600); err != nil {
+		t.Fatal(err)
 	}
-	if status, body = a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "restore_owner", "password": ownerPassword}); status != 200 {
-		t.Fatalf("restored login %d %s", status, body)
+	targetManaged := newLocalRouterSwitch(targetCfg, targetStore, func() {})
+	targetServer.Config.Handler = targetManaged
+	targetServer.Start()
+	t.Cleanup(func() {
+		targetServer.Close()
+		if err := targetManaged.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	targetJar, _ := cookiejar.New(nil)
+	targetApp := &localTestApp{server: targetServer, client: &http.Client{Jar: targetJar}, store: targetStore, runtimeToken: targetCfg.SnailRuntimeToken}
+	targetPassword := "Synthetic-target-owner-password"
+	if status, body = targetApp.call(t, "POST", "/api/v1/local/setup", map[string]string{"username": "target_owner", "password": targetPassword, "siteName": "合成恢复目标", "contact": "合成目标联系号"}); status != 201 {
+		t.Fatalf("target setup %d %s", status, body)
 	}
-	status, body = a.call(t, "GET", "/api/v1/admin/commercial-customers", nil)
+	if status, body = targetApp.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "target_owner", "password": targetPassword}); status != 200 {
+		t.Fatalf("target login %d %s", status, body)
+	}
+	status, body = targetApp.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("fresh target identity %d %s", status, body)
+	}
+	freshTargetIdentity := decodeLocal[struct {
+		Identity struct {
+			KeyID string `json:"keyId"`
+		} `json:"identity"`
+		AutomaticSigning bool `json:"automaticSigning"`
+	}](t, body)
+	if !freshTargetIdentity.AutomaticSigning || freshTargetIdentity.Identity.KeyID != "" {
+		t.Fatalf("fresh destination pre-registered a conflicting identity: %+v", freshTargetIdentity)
+	}
+	targetParsedURL, _ := url.Parse(targetServer.URL)
+	targetOldCookies := targetApp.client.Jar.Cookies(targetParsedURL)
+	status, body = targetApp.upload(t, "/api/v1/admin/backups/preview", archive, backupPassword)
+	if status != 200 {
+		t.Fatalf("target restore preview %d %s", status, body)
+	}
+	targetRestore := decodeLocal[struct {
+		ID      string `json:"previewId"`
+		Summary struct {
+			Customers int `json:"customers"`
+			Licenses  int `json:"licenses"`
+			Originals int `json:"originals"`
+		} `json:"summary"`
+	}](t, body)
+	if targetRestore.Summary.Customers != 1 || targetRestore.Summary.Licenses != 2 || targetRestore.Summary.Originals != 1 {
+		t.Fatalf("target preview lost unactivated online code records: %+v", targetRestore.Summary)
+	}
+	if status, body = targetApp.call(t, "POST", "/api/v1/admin/backups/restore", map[string]string{"previewId": targetRestore.ID, "ownerPassword": targetPassword}); status != 200 {
+		t.Fatalf("restore into independent target %d %s", status, body)
+	}
+	if status, _ = targetApp.call(t, "GET", "/api/v1/auth/me", nil); status != 401 {
+		t.Fatal("target session survived replacement by the restored owner account")
+	}
+	targetOldJar, _ := cookiejar.New(nil)
+	targetOldJar.SetCookies(targetParsedURL, targetOldCookies)
+	targetOldClient := &localTestApp{server: targetServer, client: &http.Client{Jar: targetOldJar}}
+	if status, _ = targetOldClient.call(t, "POST", "/api/v1/auth/refresh", nil); status != 401 {
+		t.Fatal("target refresh session survived restore")
+	}
+	if status, _ = targetApp.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "restore_owner", "password": targetPassword}); status != 401 {
+		t.Fatal("target password survived restore")
+	}
+	if status, body = targetApp.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "restore_owner", "password": ownerPassword}); status != 200 {
+		t.Fatalf("restored owner login on target %d %s", status, body)
+	}
+	status, body = targetApp.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("restored target signing identity %d %s", status, body)
+	}
+	identityAfterRestore := decodeLocal[struct {
+		Identity struct {
+			KeyID        string `json:"keyId"`
+			PublicKeyPEM string `json:"publicKeyPem"`
+		} `json:"identity"`
+		AutomaticSigning bool `json:"automaticSigning"`
+	}](t, body)
+	if !identityAfterRestore.AutomaticSigning || identityAfterRestore.Identity.KeyID != identityBeforeRestore.Identity.KeyID || identityAfterRestore.Identity.PublicKeyPEM != identityBeforeRestore.Identity.PublicKeyPEM {
+		t.Fatalf("restored destination lost the source signing identity: before=%+v after=%+v", identityBeforeRestore, identityAfterRestore)
+	}
+	status, body = targetApp.call(t, "GET", "/api/v1/admin/offline-licenses/"+onlineLicense.LicenseID+"/code", nil)
+	if status != 200 {
+		t.Fatalf("restored online code retrieval %d %s", status, body)
+	}
+	restoredCode := decodeLocal[struct {
+		LicenseCode string `json:"licenseCode"`
+	}](t, body)
+	if restoredCode.LicenseCode != onlineLicense.LicenseCode {
+		t.Fatal("restored environment changed the original activation code")
+	}
+	clientServer := httptest.NewServer(targetManaged.ClientHandler())
+	defer clientServer.Close()
+	clientApp := &localTestApp{clientServer: clientServer, publicClient: &http.Client{}}
+	device := offline.Device{Type: offline.MachineType, Digest: strings.Repeat("a", 64)}
+	activation := map[string]any{
+		"operationId": "1ecac4a4-6117-427b-922c-799ef8ecb911",
+		"licenseCode": onlineLicense.LicenseCode,
+		"productId":   offline.ProductID,
+		"device":      device,
+		"deviceLabel": "合成恢复后的设备",
+		"appVersion":  "0.1.0-test",
+		"buildId":     "restore-t16",
+	}
+	status, body = clientApp.callClient(t, "POST", "/api/v1/client/activate", activation)
+	if status != 200 {
+		t.Fatalf("restored online activation %d %s", status, body)
+	}
+	activated := decodeLocal[service.ClientLicenseResult](t, body)
+	if activated.RawLicense == "" || activated.LicenseID != onlineLicense.LicenseID || activated.ServerTime == "" {
+		t.Fatalf("restored activation result identity: %+v", activated)
+	}
+	status, body = clientApp.callClient(t, "POST", "/api/v1/client/activate", activation)
+	if status != 200 {
+		t.Fatalf("restored activation replay %d %s", status, body)
+	}
+	activationReplay := decodeLocal[service.ClientLicenseResult](t, body)
+	if activationReplay.RawLicense != activated.RawLicense || activationReplay.BindingID != activated.BindingID {
+		t.Fatal("restored activation replay changed the signed grant or seat")
+	}
+	activation["operationId"] = "c511fbd9-958a-4261-8d3d-3b727176a03d"
+	status, body = clientApp.callClient(t, "POST", "/api/v1/client/activate", activation)
+	if status != 200 {
+		t.Fatalf("restored same-device activation %d %s", status, body)
+	}
+	sameDevice := decodeLocal[service.ClientLicenseResult](t, body)
+	if sameDevice.RawLicense != activated.RawLicense || sameDevice.BindingID != activated.BindingID {
+		t.Fatal("restored same-device activation changed its signed grant or seat")
+	}
+	status, body = clientApp.callClient(t, "POST", "/api/v1/client/sync", map[string]any{
+		"rawLicense":  activated.RawLicense,
+		"device":      device,
+		"deviceLabel": "合成恢复后的设备",
+		"appVersion":  "0.1.0-test",
+		"buildId":     "restore-t16",
+	})
+	if status != 200 {
+		t.Fatalf("restored client sync %d %s", status, body)
+	}
+	synced := decodeLocal[service.ClientLicenseResult](t, body)
+	public, err := offline.ParsePublic([]byte(identityAfterRestore.Identity.PublicKeyPEM))
+	if err != nil {
+		t.Fatal("restored public identity", err)
+	}
+	payload, err := offline.Verify([]byte(synced.RawLicense), map[string]ed25519.PublicKey{identityAfterRestore.Identity.KeyID: public}, offline.ProductID)
+	if err != nil || payload.BindingState != "active" || payload.Revision != 1 || payload.LicenseID != onlineLicense.LicenseID || synced.RawLicense != activated.RawLicense {
+		t.Fatalf("restored sync did not retain the signed identity and activation: payload=%+v error=%v", payload, err)
+	}
+	var sourceRevision, sourceBindings, targetRevision, targetBindings int64
+	if err = s.DB.NewRaw("SELECT current_revision FROM licenses WHERE id=?", onlineLicense.LicenseID).Scan(context.Background(), &sourceRevision); err != nil {
+		t.Fatal("source online ledger", err)
+	}
+	if err = s.DB.NewRaw("SELECT count(*) FROM offline_device_bindings WHERE license_id=?", onlineLicense.LicenseID).Scan(context.Background(), &sourceBindings); err != nil {
+		t.Fatal("source online bindings", err)
+	}
+	targetDB := targetManaged.owned[len(targetManaged.owned)-1].DB
+	if err = targetDB.NewRaw("SELECT current_revision FROM licenses WHERE id=?", onlineLicense.LicenseID).Scan(context.Background(), &targetRevision); err != nil {
+		t.Fatal("restored online ledger", err)
+	}
+	if err = targetDB.NewRaw("SELECT count(*) FROM offline_device_bindings WHERE license_id=? AND superseded_at IS NULL", onlineLicense.LicenseID).Scan(context.Background(), &targetBindings); err != nil {
+		t.Fatal("restored online bindings", err)
+	}
+	if sourceRevision != 0 || sourceBindings != 0 || targetRevision != 1 || targetBindings != 1 {
+		t.Fatalf("online activation did not write only to the restored environment: source=(revision %d, bindings %d), target=(revision %d, bindings %d)", sourceRevision, sourceBindings, targetRevision, targetBindings)
+	}
+	status, body = targetApp.call(t, "GET", "/api/v1/admin/commercial-customers", nil)
 	if status != 200 {
 		t.Fatalf("customers %d %s", status, body)
 	}
@@ -249,21 +517,21 @@ func TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource(t *testing.T)
 	if err = json.Unmarshal(body, &reply); err != nil || len(reply.Data.Items) != 1 || reply.Data.Items[0].DisplayName != "备份中的客户" {
 		t.Fatal("router did not select restored data", err)
 	}
-	raw, err := os.ReadFile(runtimeFile)
+	raw, err := os.ReadFile(targetRuntimeFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var saved map[string]any
 	_ = json.Unmarshal(raw, &saved)
-	if saved["databaseName"] == nil || saved["identityDirectory"] == nil || saved["jwtSecret"] == cfg.JWTSecret {
-		t.Fatal("restore not persisted for native next launch")
+	if saved["databaseName"] == nil || saved["identityDirectory"] == nil || saved["jwtSecret"] == targetCfg.JWTSecret {
+		t.Fatal("target restore not persisted for native next launch")
 	}
 	savedDigest := sha256.Sum256(raw)
-	if managed.cfg.SnailRuntimeConfigSHA256 != hex.EncodeToString(savedDigest[:]) {
-		t.Fatal("next restore does not use newly published runtime digest")
+	if targetManaged.cfg.SnailRuntimeConfigSHA256 != hex.EncodeToString(savedDigest[:]) {
+		t.Fatal("target next launch does not use newly published runtime digest")
 	}
-	if err = managed.owned[len(managed.owned)-1].DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity='backup' AND entity_id=? AND action='restore'", restore.ID).Scan(context.Background(), &count); err != nil || count != 1 {
-		t.Fatal("restore retry duplicated audit", count, err)
+	if err = targetManaged.owned[len(targetManaged.owned)-1].DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity='backup' AND entity_id=? AND action='restore'", targetRestore.ID).Scan(context.Background(), &count); err != nil || count != 1 {
+		t.Fatal("target restore retry duplicated audit", count, err)
 	}
 	if err = s.DB.NewRaw("SELECT count(*) FROM commercial_customers").Scan(context.Background(), &count); err != nil || count != 2 {
 		t.Fatal("old source database not preserved", count, err)

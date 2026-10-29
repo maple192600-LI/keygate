@@ -51,7 +51,7 @@ func ParseRecoveryRequest(raw []byte) (RecoveryRequest, error) {
 func (s *KeyStore) SignRecovery(r RecoveryRequest, recoveryID string, now time.Time) ([]byte, RecoveryPayload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.private) == 0 || !time.Now().Before(s.deadline) {
+	if len(s.private) == 0 || (!s.serviceMode && !time.Now().Before(s.deadline)) {
 		s.locked()
 		return nil, RecoveryPayload{}, &Error{"SIGNING_KEY_LOCKED", "请输入签发密码解锁"}
 	}
@@ -71,7 +71,9 @@ func (s *KeyStore) SignRecovery(r RecoveryRequest, recoveryID string, now time.T
 	}{1, "license-recovery", p.KeyID, base64.RawURLEncoding.EncodeToString(bytes), base64.RawURLEncoding.EncodeToString(signature)}
 	raw, err := json.Marshal(envelope)
 	if err == nil {
-		s.arm()
+		if !s.serviceMode {
+			s.arm()
+		}
 	}
 	return raw, p, err
 }

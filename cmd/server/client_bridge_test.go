@@ -38,11 +38,18 @@ func TestLocalOfflineElectronBridge(t *testing.T) {
 			t.Fatalf("bridge setup %d %s", status, body)
 		}
 	}
-	status, body := a.call(t, "POST", "/api/v1/admin/offline-key/create", map[string]string{"ownerPassword": ownerPassword, "passphrase": "Synthetic-bridge-key-password"})
-	if status != 201 {
-		t.Fatalf("identity %d %s", status, body)
+	status, body := a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic identity %d %s", status, body)
 	}
-	identity := decodeLocal[offline.PublicIdentity](t, body)
+	public := decodeLocal[struct {
+		Identity         offline.PublicIdentity `json:"identity"`
+		AutomaticSigning bool                   `json:"automaticSigning"`
+	}](t, body)
+	identity := public.Identity
+	if !public.AutomaticSigning || identity.KeyID == "" || identity.PublicKeyPEM == "" {
+		t.Fatalf("automatic identity is not ready: %+v", public)
+	}
 	policy := map[string]any{"formatVersion": 1, "productId": offline.ProductID, "purpose": "commercial", "authorizationMode": "required", "licenseKey": map[string]string{"keyId": identity.KeyID, "publicKeyPem": identity.PublicKeyPEM}}
 	bytes, _ := json.Marshal(policy)
 	if err = os.WriteFile(filepath.Join(root, "public-policy.json"), bytes, 0600); err != nil {

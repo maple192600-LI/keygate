@@ -74,6 +74,15 @@ func (h *OfflineLicenseHandler) File(c *gin.Context) {
 	c.Header("X-Content-SHA256", row.SHA256)
 	c.Data(200, "application/octet-stream", row.RawBytes)
 }
+func (h *OfflineLicenseHandler) Code(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	code, err := h.Service.Store.OfflineLicenseCode(c, c.GetString("user_id"), c.Param("id"))
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
+	response.OK(c, gin.H{"licenseCode": code})
+}
 func (h *OfflineLicenseHandler) Operation(c *gin.Context) {
 	row, err := h.Service.Store.IssuanceOperation(c, c.Param("operationId"))
 	if err != nil {

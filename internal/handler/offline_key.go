@@ -21,10 +21,11 @@ type keyImportPreview struct {
 	ownerID string
 }
 type OfflineKeyHandler struct {
-	Store    *store.Store
-	Keys     *offline.KeyStore
-	mu       sync.Mutex
-	previews map[string]keyImportPreview
+	Store             *store.Store
+	Keys              *offline.KeyStore
+	ServicePassphrase string
+	mu                sync.Mutex
+	previews          map[string]keyImportPreview
 }
 
 func (h *OfflineKeyHandler) ownerPassword(c *gin.Context, password string) bool {
@@ -77,7 +78,7 @@ func (h *OfflineKeyHandler) Public(c *gin.Context) {
 		public.KeyID = expected.KeyID
 		public.PublicKeyPEM = expected.PublicKeyPEM
 	}
-	response.OK(c, gin.H{"identity": public, "hasHistory": expected.KeyID != ""})
+	response.OK(c, gin.H{"identity": public, "hasHistory": expected.KeyID != "", "automaticSigning": h.Keys.ServiceMode() || public.State == "uncreated" && expected.KeyID == ""})
 }
 func (h *OfflineKeyHandler) Create(c *gin.Context) {
 	var input struct {
@@ -130,6 +131,48 @@ func (h *OfflineKeyHandler) Unlock(c *gin.Context) {
 		return
 	}
 	if err = h.audit(c, public.KeyID, "unlock"); err != nil {
+		h.Keys.Lock()
+		localOfflineError(c, err)
+		return
+	}
+	response.OK(c, public)
+}
+func (h *OfflineKeyHandler) EnableService(c *gin.Context) {
+	var input struct {
+		Passphrase string `json:"passphrase"`
+	}
+	if !LocalJSON(c, &input) {
+		return
+	}
+	physical, err := h.Keys.Status()
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	if h.Keys.ServiceMode() {
+		response.OK(c, physical)
+		return
+	}
+	expected, err := h.Store.ExpectedSigningIdentity(c, physical)
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	if expected.KeyID == "" || expected.KeyID != physical.KeyID {
+		response.Err(c, 409, "SIGNING_IDENTITY_INVALID", "身份与已登记签发记录不一致，请先核对原身份")
+		return
+	}
+	public, err := h.Keys.EnableService(input.Passphrase, h.ServicePassphrase)
+	if err != nil {
+		localOfflineError(c, err)
+		return
+	}
+	if public.KeyID != expected.KeyID {
+		h.Keys.Lock()
+		response.Err(c, 409, "SIGNING_IDENTITY_INVALID", "身份与已登记签发记录不一致，请先核对原身份")
+		return
+	}
+	if err = h.audit(c, public.KeyID, "enable-service-signing"); err != nil {
 		h.Keys.Lock()
 		localOfflineError(c, err)
 		return
@@ -268,6 +311,12 @@ func (h *OfflineKeyHandler) Import(c *gin.Context) {
 	if err = h.Keys.Import(preview.raw, history); err != nil {
 		localOfflineError(c, err)
 		return
+	}
+	if h.ServicePassphrase != "" {
+		if _, err = h.Keys.UnlockService(h.ServicePassphrase); err != nil {
+			localOfflineError(c, err)
+			return
+		}
 	}
 	if err = h.audit(c, preview.keyID, "import"); err != nil {
 		response.Err(c, 500, "SIGNING_IDENTITY_RESULT_UNKNOWN", "身份已保存，但操作记录未确认；请刷新状态后继续")

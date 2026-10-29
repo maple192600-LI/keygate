@@ -34,11 +34,11 @@ func TestFixedPublicVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Revision != 1 || p.KeyID != TestKeyID || p.ExpiresAt == nil || *p.ExpiresAt != "2026-11-22T01:00:00.000Z" {
+	if p.Revision != 1 || p.KeyID != TestKeyID || p.BindingState != "active" || p.ExpiresAt == nil || *p.ExpiresAt != "2026-11-22T01:00:00.000Z" {
 		t.Fatalf("unexpected payload: %+v", p)
 	}
 	hash := sha256.Sum256(raw)
-	if hex.EncodeToString(hash[:]) != "f00cf2cac79761b04c6ce0df466cd54d7f0826662dd4db8cf47a81b173be05e1" {
+	if hex.EncodeToString(hash[:]) != "b57625d400490a8464c770a29fd2b9a9362d1c069aed62efa954837ba5eb781c" {
 		t.Fatal("original file hash differs")
 	}
 	req, _, err := ParseRequest(fixture(t, "TEST_ONLY.request-v2.snailreq"), ProductID)
@@ -46,6 +46,62 @@ func TestFixedPublicVector(t *testing.T) {
 		t.Fatalf("request: %v", err)
 	}
 }
+
+func TestPayloadRequiresKnownBindingState(t *testing.T) {
+	raw := fixture(t, "TEST_ONLY.license-v2.snaillic")
+	var env Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := canonicalBase64(env.PayloadB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "active", value: "active", valid: true},
+		{name: "transferred", value: "transferred", valid: true},
+		{name: "unknown", value: "revoked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if test.value == "" {
+				delete(fields, "bindingState")
+			} else {
+				fields["bindingState"], _ = json.Marshal(test.value)
+			}
+			mutated, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = validatePayload(mutated, ProductID)
+			if (err == nil) != test.valid {
+				t.Fatalf("validatePayload error=%v, want valid=%v", err, test.valid)
+			}
+		})
+	}
+	t.Run("missing", func(t *testing.T) {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &fields); err != nil {
+			t.Fatal(err)
+		}
+		delete(fields, "bindingState")
+		mutated, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = validatePayload(mutated, ProductID); err == nil {
+			t.Fatal("missing bindingState was accepted")
+		}
+	})
+}
+
 func TestStrictJSONAndSignedFailures(t *testing.T) {
 	for _, raw := range [][]byte{[]byte(`{"a":1,"\u0061":2}`), []byte(`{"a":"\ud800"}`), []byte(`{"a":"\udc00"}`), []byte(`{} {}`), []byte("\xef\xbb\xbf{}"), {0xff}, []byte(strings.Repeat("[", 10) + "0" + strings.Repeat("]", 10))} {
 		if _, err := StrictJSON(raw, RequestLimit); err == nil {
@@ -255,9 +311,14 @@ func TestTermRejectionsAndFutureRenewal(t *testing.T) {
 	if err != nil || got.NotBefore != current.NotBefore || *got.ExpiresAt != "2026-11-29T01:00:00.000Z" {
 		t.Fatalf("future renewal %v %+v", err, got)
 	}
-	for _, term := range []Term{{Kind: "days", Amount: 0}, {Kind: "days", Amount: 36501}, {Kind: "months", Amount: 1201}, {Kind: "date", EndDate: "2026-02-30"}, {Kind: "date", EndDate: "10000-01-01"}, {Kind: "perpetual", Amount: 1}} {
+	for _, term := range []Term{{Kind: "days", Amount: 0}, {Kind: "date", EndDate: "2026-02-30"}, {Kind: "date", EndDate: "10000-01-01"}, {Kind: "perpetual", Amount: 1}} {
 		if _, err := CalculateTerm(now, "initial", term, nil); err == nil {
 			t.Fatalf("accepted %+v", term)
+		}
+	}
+	for _, term := range []Term{{Kind: "days", Amount: 36501}, {Kind: "months", Amount: 1201}, {Kind: "years", Amount: 101}} {
+		if _, err := CalculateTerm(now, "initial", term, nil); err != nil {
+			t.Fatalf("rejected supported term %+v: %v", term, err)
 		}
 	}
 	if _, err := CalculateTerm(now, "renew", Term{Kind: "date", EndDate: "2026-10-31"}, current); err == nil {

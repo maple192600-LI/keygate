@@ -11,8 +11,25 @@ import (
 
 var ErrLocalSetupComplete = errors.New("SETUP_COMPLETE")
 var ErrLocalCredentials = errors.New("INVALID_CREDENTIALS")
+var ErrLocalRecoveryCredentials = errors.New("INVALID_RECOVERY_CREDENTIALS")
+
+const (
+	SigningServiceActorID         = "snail-signing-service"
+	ClientActivationServiceActorID = "snail-client-activation-service"
+)
 
 func (s *Store) InitializeLocal(ctx context.Context, username, hash, siteName, contact string) (*model.User, error) {
+	return s.initializeLocal(ctx, username, hash, siteName, contact, "")
+}
+
+func (s *Store) InitializeLocalWithRecovery(ctx context.Context, username, hash, siteName, contact, recoveryHash string) (*model.User, error) {
+	if !auth.ValidPasswordHash(recoveryHash) {
+		return nil, errors.New("local recovery credential hash is invalid")
+	}
+	return s.initializeLocal(ctx, username, hash, siteName, contact, recoveryHash)
+}
+
+func (s *Store) initializeLocal(ctx context.Context, username, hash, siteName, contact, recoveryHash string) (*model.User, error) {
 	var result *model.User
 	err := RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
 		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(8675309)"); err != nil {
@@ -41,9 +58,71 @@ func (s *Store) InitializeLocal(ctx context.Context, username, hash, siteName, c
 				return err
 			}
 		}
+		if recoveryHash != "" {
+			if _, err := tx.NewRaw("INSERT INTO settings(key,value) VALUES('owner_recovery_credential_hash',?)", recoveryHash).Exec(ctx); err != nil {
+				return err
+			}
+		}
 		return LocalAuditIn(ctx, tx, result.ID, "owner", result.ID, "initialize", nil)
 	})
 	return result, err
+}
+
+func (s *Store) RotateLocalRecoveryCredential(ctx context.Context, ownerID, recoveryHash string) error {
+	if !auth.ValidPasswordHash(recoveryHash) {
+		return errors.New("local recovery credential hash is invalid")
+	}
+	return RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+		var exists bool
+		if err := tx.NewRaw("SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND role='owner' AND username IS NOT NULL)", ownerID).Scan(ctx, &exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrLocalCredentials
+		}
+		if _, err := tx.NewRaw("INSERT INTO settings(key,value) VALUES('owner_recovery_credential_hash',?) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", recoveryHash).Exec(ctx); err != nil {
+			return err
+		}
+		return LocalAuditIn(ctx, tx, ownerID, "owner-recovery-credential", ownerID, "rotate", nil)
+	})
+}
+
+func (s *Store) RecoverLocalOwner(ctx context.Context, username, recoveryCredential, passwordHash string) error {
+	if !auth.ValidPasswordHash(passwordHash) || recoveryCredential == "" {
+		return ErrLocalRecoveryCredentials
+	}
+	return RunInTx(ctx, s.DB, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewRaw("SELECT pg_advisory_xact_lock(8675309)").Exec(ctx); err != nil {
+			return err
+		}
+		var savedHash string
+		if err := tx.NewRaw("SELECT value FROM settings WHERE key='owner_recovery_credential_hash' FOR UPDATE").Scan(ctx, &savedHash); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrLocalRecoveryCredentials
+			}
+			return err
+		}
+		owner := new(model.User)
+		if err := tx.NewSelect().Model(owner).Where("username=? AND role='owner'", username).For("UPDATE").Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrLocalRecoveryCredentials
+			}
+			return err
+		}
+		if !auth.VerifyPassword(savedHash, recoveryCredential) {
+			return ErrLocalRecoveryCredentials
+		}
+		if _, err := tx.NewRaw("UPDATE users SET password_hash=?,auth_version=auth_version+1,updated_at=now() WHERE id=?", passwordHash, owner.ID).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewRaw("DELETE FROM refresh_tokens WHERE user_id=?", owner.ID).Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewRaw("DELETE FROM settings WHERE key='owner_recovery_credential_hash'").Exec(ctx); err != nil {
+			return err
+		}
+		return LocalAuditIn(ctx, tx, owner.ID, "owner", owner.ID, "recovery-password-reset", nil)
+	})
 }
 func EnsureOfflineActor(ctx context.Context, db bun.IDB, actor string) error {
 	_, err := db.NewRaw(`INSERT INTO offline_actors(id,display_name)

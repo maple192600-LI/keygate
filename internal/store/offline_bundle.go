@@ -194,7 +194,8 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 		}
 		for _, row := range b.Tables[table] {
 			id := rowText(row, key)
-			if !offline.ValidUUID4(id) || indexes[table][id] != nil {
+			serviceActor := table == "offline_actors" && (id == SigningServiceActorID || id == ClientActivationServiceActorID)
+			if (!offline.ValidUUID4(id) && !serviceActor) || indexes[table][id] != nil {
 				return bundleError("记录编号无效或重复：" + table)
 			}
 			indexes[table][id] = row
@@ -252,23 +253,35 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 	}
 	for _, l := range b.Tables["licenses"] {
 		id := rowText(l, "id")
-		r := indexes["license_issuances"][rowText(l, "current_issuance_id")]
-		if rowText(l, "fulfillment_mode") != "offline_file" || r == nil || highest[id] != rowInt(l, "current_revision") || rowInt(r, "revision") != highest[id] || rowText(r, "license_id") != id || indexes["commercial_customers"][rowText(l, "customer_id")] == nil || !equalBundleTime(l["valid_from"], r["not_before"]) || !equalBundleTime(l["valid_until"], r["expires_at"]) {
-			return bundleError("当前授权指针或最高版本不一致")
-		}
 		plan := indexes["plans"][rowText(l, "plan_id")]
 		product := indexes["products"][rowText(l, "product_id")]
-		if plan == nil || product == nil || rowText(plan, "product_id") != rowText(l, "product_id") || rowText(product, "license_product_code") != offline.ProductID {
+		if rowText(l, "fulfillment_mode") != "offline_file" || indexes["commercial_customers"][rowText(l, "customer_id")] == nil || plan == nil || product == nil || rowText(plan, "product_id") != rowText(l, "product_id") || rowText(product, "license_product_code") != offline.ProductID {
 			return bundleError("授权产品与计划关系无效")
 		}
-		active := 0
+		currentRevision := rowInt(l, "current_revision")
+		issuanceID := rowText(l, "current_issuance_id")
+		current := indexes["license_issuances"][issuanceID]
+		active, bindings := 0, 0
 		for _, binding := range b.Tables["offline_device_bindings"] {
-			if rowText(binding, "license_id") == id && string(binding["superseded_at"]) == "null" {
-				active++
-				if rowText(binding, "id") != rowText(r, "binding_id") {
-					return bundleError("当前设备与最新签发原件不一致")
+			if rowText(binding, "license_id") == id {
+				bindings++
+				if string(binding["superseded_at"]) == "null" {
+					active++
+					if current != nil && rowText(binding, "id") != rowText(current, "binding_id") {
+						return bundleError("当前设备与最新签发原件不一致")
+					}
 				}
 			}
+		}
+		if currentRevision == 0 {
+			// valid_from is a required legacy column; revision zero means it is only a creation placeholder.
+			if issuanceID != "" || highest[id] != 0 || string(l["valid_until"]) != "null" || bindings != 0 {
+				return bundleError("未激活授权不得包含签发版本或设备绑定")
+			}
+			continue
+		}
+		if current == nil || highest[id] != currentRevision || rowInt(current, "revision") != highest[id] || rowText(current, "license_id") != id || !equalBundleTime(l["valid_from"], current["not_before"]) || !equalBundleTime(l["valid_until"], current["expires_at"]) {
+			return bundleError("当前授权指针或最高版本不一致")
 		}
 		if active != 1 {
 			return bundleError("授权没有唯一当前设备")

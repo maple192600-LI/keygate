@@ -29,9 +29,12 @@ func decodeLocal[T any](t *testing.T, body []byte) T {
 	return envelope.Data
 }
 func TestLocalOfflineIssuanceHTTP(t *testing.T) {
+	type identityStatus struct {
+		Identity         offline.PublicIdentity `json:"identity"`
+		AutomaticSigning bool                   `json:"automaticSigning"`
+	}
 	a := localApp(t)
 	password := "Synthetic-issuing-owner-password"
-	passphrase := "Synthetic-issuing-key-passphrase"
 	if status, body := a.call(t, "POST", "/api/v1/local/setup", map[string]string{"username": "issuing_owner", "password": password, "siteName": "签发隔离厂商", "contact": "合成联系方式"}); status != 201 {
 		t.Fatalf("setup %d %s", status, body)
 	}
@@ -68,14 +71,14 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	if preview.ExpiresAt == nil || *preview.ExpiresAt != expected || preview.NotBefore != preview.BaseTime {
 		t.Fatal("preview differs from independent 7x24-hour expectation")
 	}
-	status, body = a.call(t, "POST", "/api/v1/admin/offline-key/create", map[string]string{"ownerPassword": password, "passphrase": passphrase})
-	if status != 201 {
-		t.Fatalf("key create %d %s", status, body)
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic signing identity %d %s", status, body)
 	}
-	identity := decodeLocal[offline.PublicIdentity](t, body)
-	pub, err := offline.ParsePublic([]byte(identity.PublicKeyPEM))
-	if err != nil {
-		t.Fatal(err)
+	public := decodeLocal[identityStatus](t, body)
+	identity := public.Identity
+	if !public.AutomaticSigning || identity.KeyID != "" || identity.PublicKeyPEM != "" {
+		t.Fatalf("fresh service created a signing identity before issuance: %+v", public)
 	}
 	command := service.OfflineIssueCommand{OfflineIntent: intent, OperationID: store.NewID(), PreviewBase: preview.PreviewBase}
 	var wg sync.WaitGroup
@@ -109,6 +112,19 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 	if count != 2 || replays != 1 {
 		t.Fatalf("count=%d replay=%d", count, replays)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic signing identity after issuance %d %s", status, body)
+	}
+	public = decodeLocal[identityStatus](t, body)
+	identity = public.Identity
+	if !public.AutomaticSigning || identity.KeyID == "" || identity.PublicKeyPEM == "" {
+		t.Fatalf("automatic signing identity was not established at issuance: %+v", public)
+	}
+	pub, err := offline.ParsePublic([]byte(identity.PublicKeyPEM))
+	if err != nil {
+		t.Fatal(err)
 	}
 	// Online lifecycle helpers must refuse even an otherwise qualifying
 	// offline row; the original signed deadline and status stay unchanged.
@@ -167,6 +183,13 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	if actualStatus != "active" || actualUntil.UTC().Format("2006-01-02T15:04:05.000Z") != expected {
 		t.Fatal("online lifecycle changed signed license metadata")
 	}
+	status, body, headers := a.callHeaders(t, "GET", "/api/v1/admin/offline-licenses/"+result.LicenseID+"/code", nil)
+	code := decodeLocal[struct {
+		LicenseCode string `json:"licenseCode"`
+	}](t, body)
+	if status != 200 || code.LicenseCode == "" || !strings.Contains(strings.ToLower(headers.Get("Cache-Control")), "no-store") {
+		t.Fatalf("license code must be owner-readable and not cacheable: %d %s %v", status, body, headers)
+	}
 	status, file := a.call(t, "GET", "/api/v1/admin/license-issuances/"+url.PathEscape(result.IssuanceID)+"/file", nil)
 	if status != 200 {
 		t.Fatalf("download %d %s", status, file)
@@ -215,11 +238,30 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}](t, body).Items) != 1 {
 		t.Fatal("delivery row count")
 	}
-	if status, _ := a.call(t, "POST", "/api/v1/admin/offline-key/lock", nil); status != 200 {
-		t.Fatal("lock")
+	if status, body := a.call(t, "POST", "/api/v1/auth/logout", nil); status != 200 {
+		t.Fatalf("logout %d %s", status, body)
 	}
-	if status, body := a.call(t, "POST", "/api/v1/admin/offline-licenses", command); status != 200 || !decodeLocal[service.OfflineIssueResult](t, body).Replayed {
-		t.Fatalf("locked idempotent receipt %d %s", status, body)
+	if status, body := a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "issuing_owner", "password": password}); status != 200 {
+		t.Fatalf("login after logout %d %s", status, body)
+	}
+	status, signingBody := a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("signing status after logout %d %s", status, signingBody)
+	}
+	statusAfterLogout := decodeLocal[identityStatus](t, signingBody)
+	if !statusAfterLogout.AutomaticSigning || statusAfterLogout.Identity.KeyID != identity.KeyID {
+		t.Fatalf("owner logout stopped service signing: %+v response=%s", statusAfterLogout, signingBody)
+	}
+	renewIntent := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renewIntent)
+	if status != 200 {
+		t.Fatalf("renew preview after logout %d %s", status, body)
+	}
+	renewPreview := decodeLocal[service.OfflinePreview](t, body)
+	renewCommand := service.OfflineIssueCommand{OfflineIntent: renewIntent, OperationID: store.NewID(), PreviewBase: renewPreview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/"+result.LicenseID+"/renew", renewCommand)
+	if status != 200 || decodeLocal[service.OfflineIssueResult](t, body).Revision != 2 {
+		t.Fatalf("renew after logout %d %s", status, body)
 	}
 	conflicting := command
 	conflicting.Term.Amount = 8
@@ -231,7 +273,7 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 
 	statePath := "/api/v1/admin/offline-licenses/" + result.LicenseID + "/issuance-state"
-	stateCommand := map[string]any{"operationId": store.NewID(), "enabled": false, "expectedEnabled": true, "expectedRevision": 1, "reason": "合成停发检查"}
+	stateCommand := map[string]any{"operationId": store.NewID(), "enabled": false, "expectedEnabled": true, "expectedRevision": 2, "reason": "合成停发检查"}
 	if status, body := a.call(t, "POST", statePath, stateCommand); status != 200 {
 		t.Fatalf("stop %d %s", status, body)
 	}
@@ -240,14 +282,14 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}](t, body).Replayed {
 		t.Fatal("state operation not idempotent", status, string(body))
 	}
-	renew := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	renew := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 2, Term: offline.Term{Kind: "days", Amount: 7}}
 	if status, body := a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renew); status != 409 || !bytes.Contains(body, []byte("ISSUANCE_STOPPED")) {
 		t.Fatal("stopped issuance still allowed", status, string(body))
 	}
 	if status, body := a.call(t, "GET", "/api/v1/admin/license-issuances/"+result.IssuanceID+"/file", nil); status != 200 || !bytes.Equal(body, file) {
 		t.Fatal("stopping changed previously issued bytes")
 	}
-	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=recorded&termState=valid", nil)
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=pending&termState=valid", nil)
 	listing := decodeLocal[struct {
 		Items []store.OfflineLicenseView `json:"items"`
 		Total int                        `json:"total"`
@@ -261,10 +303,10 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 	status, body = a.call(t, "GET", "/api/v1/admin/overview", nil)
 	overview := decodeLocal[store.OfflineOverview](t, body)
-	if status != 200 || overview.Customers != 1 || overview.Licenses != 1 || overview.Valid != 1 || overview.Stopped != 1 || overview.PendingDelivery != 0 || overview.UsageState != "unreported" {
+	if status != 200 || overview.Customers != 1 || overview.Licenses != 1 || overview.Valid != 1 || overview.Stopped != 1 || overview.PendingDelivery != 1 || overview.UsageState != "unreported" {
 		t.Fatalf("overview %d %s", status, body)
 	}
-	stateCommand = map[string]any{"operationId": store.NewID(), "enabled": true, "expectedEnabled": false, "expectedRevision": 1, "reason": "合成恢复续发检查"}
+	stateCommand = map[string]any{"operationId": store.NewID(), "enabled": true, "expectedEnabled": false, "expectedRevision": 2, "reason": "合成恢复续发检查"}
 	if status, body := a.call(t, "POST", statePath, stateCommand); status != 200 {
 		t.Fatalf("resume %d %s", status, body)
 	}

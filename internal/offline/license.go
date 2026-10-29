@@ -22,7 +22,7 @@ import (
 )
 
 const ProductID = "cn.snailfinance.desktop"
-const MachineType = "windows-machineguid-sha256/v1"
+const MachineType = "windows-smbios-uuid-sha256/v1"
 const RequestLimit = 64 * 1024
 const LicenseLimit = 128 * 1024
 const TestKeyID = "lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2"
@@ -70,6 +70,7 @@ type Payload struct {
 	NotBefore     string  `json:"notBefore"`
 	ExpiresAt     *string `json:"expiresAt"`
 	Binding       Device  `json:"binding"`
+	BindingState  string  `json:"bindingState"`
 	KeyID         string  `json:"keyId"`
 }
 type Envelope struct {
@@ -316,7 +317,7 @@ func ParseRequest(raw []byte, product string) (Request, string, error) {
 }
 func validatePayload(raw []byte, product string) (Payload, error) {
 	var p Payload
-	obj, err := decodeObject(raw, RequestLimit, &p, "formatVersion", "licenseId", "issuanceId", "productId", "purpose", "customerId", "revision", "issuedAt", "notBefore", "expiresAt", "binding", "keyId")
+	obj, err := decodeObject(raw, RequestLimit, &p, "formatVersion", "licenseId", "issuanceId", "productId", "purpose", "customerId", "revision", "issuedAt", "notBefore", "expiresAt", "binding", "bindingState", "keyId")
 	if err != nil {
 		return p, err
 	}
@@ -344,6 +345,9 @@ func validatePayload(raw []byte, product string) (Payload, error) {
 	}
 	if err = validateDevice(obj["binding"], p.Binding); err != nil {
 		return p, err
+	}
+	if p.BindingState != "active" && p.BindingState != "transferred" {
+		return p, invalid("设备绑定状态无效")
 	}
 	return p, nil
 }
