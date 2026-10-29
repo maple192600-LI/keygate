@@ -1,13 +1,11 @@
 import { Plus, RefreshCw, Search, Users } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { localRequest } from "@/lib/local-offline-api"
-import LocalLicenses, { type LicenseAction } from "./local-licenses"
+import LocalLicenses from "./local-licenses"
 import IssuanceStateForm from "./local-state-form"
 
 export type CommercialCustomer = {
@@ -40,12 +38,14 @@ const customerNumber = (id: string) => `C-${id.replaceAll("-", "").toUpperCase()
 
 export default function LocalCustomers({
   onIssue,
-  onManage,
+  onSelectLicense,
+  hidden = false,
   epoch = 0,
 }: {
   epoch?: number
-  onIssue?: (customer: CommercialCustomer) => void
-  onManage?: LicenseAction
+  onIssue?: (customer: CommercialCustomer, from?: "customer-detail") => void
+  onSelectLicense: (id: string) => void
+  hidden?: boolean
 }) {
   const [items, setItems] = useState<CommercialCustomer[]>([])
   const [total, setTotal] = useState(0)
@@ -80,8 +80,27 @@ export default function LocalCustomers({
       alive = false
     }
   }, [page, submitted, reload, epoch])
+  if (editing) {
+    return (
+      <CustomerForm
+        customer={editing}
+        epoch={epoch}
+        hidden={hidden}
+        onIssue={onIssue}
+        onSelectLicense={onSelectLicense}
+        onClose={() => {
+          setEditing(null)
+          setReload((value) => value + 1)
+        }}
+        onSaved={(saved) => {
+          setEditing(editing === "new" ? null : saved)
+          setReload((value) => value + 1)
+        }}
+      />
+    )
+  }
   return (
-    <section className="lc-list-page">
+    <section className="lc-list-page" hidden={hidden}>
       <div className="lc-page-heading">
         <h1>客户</h1>
         <Button onClick={() => setEditing("new")}>
@@ -214,36 +233,27 @@ export default function LocalCustomers({
           )}
         </div>
       </div>
-      {editing && (
-        <CustomerForm
-          customer={editing}
-          onManage={onManage}
-          onIssue={onIssue}
-          onClose={() => {
-            setEditing(null)
-            setReload((value) => value + 1)
-          }}
-          onSaved={() => {
-            setEditing(null)
-            setReload((value) => value + 1)
-          }}
-        />
-      )}
     </section>
   )
 }
 export function CustomerForm({
   customer,
+  epoch = 0,
+  returnLabel,
+  hidden = false,
   onClose,
   onSaved,
-  onManage,
   onIssue,
+  onSelectLicense,
 }: {
   customer: CommercialCustomer | "new"
+  epoch?: number
+  returnLabel?: string
+  hidden?: boolean
   onClose: () => void
   onSaved: (customer: CommercialCustomer) => void
-  onManage?: LicenseAction
-  onIssue?: (customer: CommercialCustomer) => void
+  onIssue?: (customer: CommercialCustomer, from?: "customer-detail") => void
+  onSelectLicense: (id: string) => void
 }) {
   const [draft, setDraft] = useState<Draft>(
     customer === "new"
@@ -288,6 +298,16 @@ export function CustomerForm({
         draft,
         customer === "new" ? "POST" : "PATCH",
       )
+      setDraft({
+        displayName: saved.displayName,
+        customerType: saved.customerType,
+        contactName: saved.contactName,
+        contactMethod: saved.contactMethod,
+        email: saved.email,
+        sourceText: saved.sourceText,
+        notes: saved.notes,
+      })
+      setEnabled(saved.issuanceEnabled)
       onSaved(saved)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败，请重试")
@@ -357,26 +377,22 @@ export function CustomerForm({
           <Button type="submit" disabled={busy}>
             {busy ? "正在保存…" : "保存客户"}
           </Button>
-          <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
-            取消
-          </Button>
         </div>
       </form>
       {customer !== "new" && (
         <div className="grid gap-6">
-          <div className="flex gap-3">
-            {onIssue && (
+          {onIssue && (
+            <div className="flex gap-3">
               <Button
                 disabled={!enabled}
                 onClick={() => {
-                  onClose()
-                  onIssue({ ...customer, issuanceEnabled: enabled })
+                  onIssue({ ...customer, issuanceEnabled: enabled }, "customer-detail")
                 }}
               >
                 为此客户发放授权
               </Button>
-            )}
-          </div>
+            </div>
+          )}
           <IssuanceStateForm
             kind="customer"
             id={customer.id}
@@ -384,52 +400,27 @@ export function CustomerForm({
             onChanged={() => setEnabled((value) => !value)}
           />
           <LocalLicenses
-            epoch={Number(enabled)}
+            epoch={epoch + Number(enabled)}
             customerId={customer.id}
             title="已有授权"
-            onManage={
-              onManage
-                ? (row, action, bindingId) => {
-                    onClose()
-                    onManage(row, action, bindingId)
-                  }
-                : undefined
-            }
+            onSelectLicense={onSelectLicense}
           />
         </div>
       )}
     </>
   )
-  return customer === "new" ? (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
-      }}
-    >
-      <DialogContent className="lc-dialog max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>新建客户</DialogTitle>
-        </DialogHeader>
-        <DialogBody>{content}</DialogBody>
-      </DialogContent>
-    </Dialog>
-  ) : (
-    <Sheet
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
-      }}
-    >
-      <SheetContent
-        side="right"
-        label="客户档案"
-        className="lc-drawer w-[1020px] max-w-[95vw] gap-6 overflow-y-auto p-7"
-      >
-        <h2 className="text-xl font-semibold">客户档案</h2>
-        <div className="text-sm text-muted-foreground">客户编号 {customerNumber(customer.id)}</div>
-        <div className="lc-drawer-body">{content}</div>
-      </SheetContent>
-    </Sheet>
+  return (
+    <section className="lc-list-page" hidden={hidden}>
+      <div className="lc-page-heading">
+        <div className="grid gap-1">
+          <h1>{customer === "new" ? "新建客户" : "客户档案"}</h1>
+          {customer !== "new" && <span className="text-sm text-muted-foreground">{customerNumber(customer.id)}</span>}
+        </div>
+        <Button variant="outline" type="button" onClick={onClose} disabled={busy}>
+          {customer === "new" ? (returnLabel ?? "取消") : "返回列表"}
+        </Button>
+      </div>
+      <div className="lc-list-panel grid gap-6 p-6">{content}</div>
+    </section>
   )
 }

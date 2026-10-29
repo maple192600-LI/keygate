@@ -305,7 +305,7 @@ async function login(page, username, password) {
 
 async function createCustomer(page, email) {
   await page.getByRole('button', { name: '新建客户', exact: true }).click();
-  const form = page.getByRole('dialog', { name: '新建客户', exact: true });
+  const form = page.getByRole('heading', { name: '新建客户', exact: true }).locator('xpath=../../..');
   await form.getByLabel('客户名称', { exact: true }).fill('同名合成客户');
   await form.getByLabel('联系人', { exact: true }).fill('合成联系人');
   await form.getByLabel('邮箱', { exact: true }).fill(email);
@@ -314,10 +314,22 @@ async function createCustomer(page, email) {
   await expect(form).toHaveCount(0);
 }
 
-async function showLicenseDetails(page, licenseNumber) {
+function currentLicenseDetails(page) {
+  return page.locator('main.lc-content > section.lc-list-page')
+    .filter({ has: page.getByRole('heading', { name: '授权详情', exact: true }) });
+}
+
+async function showLicenseDetails(page, licenseNumber, action = '查看详情') {
   await page.getByRole('row').filter({ hasText: licenseNumber })
-    .getByRole('button', { name: '查看详情', exact: true }).click();
-  return page.getByRole('dialog', { name: '授权详情', exact: true });
+    .getByRole('button', { name: action, exact: true }).click();
+  const details = currentLicenseDetails(page);
+  await expect(details).toBeVisible();
+  return details;
+}
+
+function lifecyclePage(page) {
+  return page.locator('main.lc-content > section.lc-list-page')
+    .filter({ has: page.getByRole('heading', { name: /^(发放授权|续费授权|办理换机|授权已办理)/ }) });
 }
 
 async function closeWindowAndWait(app, scenario, startedAt, dataRoot, postgresRoot) {
@@ -522,7 +534,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
 
   const selectedCustomer = duplicateRows.filter({ hasText: 'second@synthetic.invalid' });
   await selectedCustomer.getByRole('button', { name: '发放授权', exact: true }).click();
-  let issue = page.getByRole('dialog');
+  let issue = lifecyclePage(page);
   await issue.getByLabel('授权期限', { exact: true }).selectOption('days');
   await issue.getByLabel('数量', { exact: true }).fill('7');
   await issue.getByLabel('允许设备数', { exact: true }).fill('1');
@@ -582,7 +594,20 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     licenseCode,
     '授权码已复制',
   );
-  await issue.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await issue.getByRole('button', { name: '返回列表', exact: true }).click();
+
+  const customerRow = page.getByRole('row').filter({ hasText: 'second@synthetic.invalid' });
+  await customerRow.getByRole('button', { name: '查看档案', exact: true }).click();
+  const customerDetails = page.getByRole('heading', { name: '客户档案', exact: true }).locator('xpath=../../..');
+  const customerLicense = customerDetails.getByRole('row').filter({ hasText: licenseNumber });
+  await expect(customerLicense).toHaveCount(1);
+  await customerLicense.getByRole('button', { name: '查看详情', exact: true }).click();
+  const customerLicenseDetails = currentLicenseDetails(page);
+  await expect(customerLicenseDetails).toBeVisible();
+  await customerLicenseDetails.getByRole('button', { name: '返回客户档案', exact: true }).click();
+  await expect(customerDetails).toBeVisible();
+  await customerDetails.getByRole('button', { name: '返回列表', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '客户', exact: true })).toBeVisible();
 
   const codeReply = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/code');
   assert.equal(codeReply.status, 200);
@@ -646,7 +671,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   const deliveryHistory = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/deliveries');
   assert.equal(deliveryHistory.status, 200);
   assert.ok(deliveryHistory.value.data.items.some(item => item.id === delivered.id));
-  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await details.getByRole('button', { name: '返回列表', exact: true }).click();
 
   await page.getByRole('button', { name: '交付记录', exact: true }).click();
   const deliveryRow = page.getByRole('row').filter({ hasText: licenseNumber });
@@ -658,11 +683,11 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await expect(deliveryRow).toHaveCount(1);
   await expect(deliveryRow).toContainText('邮件');
   await expect(deliveryRow).toContainText('synthetic-recipient@invalid.example');
-  await deliveryRow.getByRole('button', { name: '查看记录', exact: true }).click();
-  details = page.getByRole('dialog', { name: '授权详情', exact: true });
+  details = await showLicenseDetails(page, licenseNumber, '查看记录');
   await expect(details.getByRole('heading', { name: '交付记录', exact: true })).toBeVisible();
   await expect(details.getByRole('row').filter({ hasText: 'synthetic-recipient@invalid.example' })).toHaveCount(1);
-  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await details.getByRole('button', { name: '返回列表', exact: true }).click();
+  await expect(deliveryRow).toHaveCount(1);
 
   await page.getByRole('button', { name: '授权', exact: true }).click();
   await page.getByLabel('查询授权', { exact: true }).fill(licenseNumber);
@@ -694,12 +719,12 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(firstReportedDevice.buildId, 'synthetic-build-20261029');
   assert.ok(firstReportedDevice.lastReportedAt);
 
-  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await details.getByRole('button', { name: '返回列表', exact: true }).click();
   details = await showLicenseDetails(page, licenseNumber);
   await expect(details.getByText('合成设备一', { exact: true })).toBeVisible();
   await details.getByRole('button', { name: '续期', exact: true }).click();
   await expect(details).toHaveCount(0);
-  let lifecycle = page.getByRole('dialog');
+  let lifecycle = lifecyclePage(page);
   await lifecycle.getByLabel('数量', { exact: true }).fill('7');
   await lifecycle.getByRole('button', { name: '预览授权条件', exact: true }).click();
   await expect(lifecycle.getByText(licenseNumber, { exact: true })).toBeVisible();
@@ -711,9 +736,9 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(renewed.licenseId, licenseID);
   assert.equal(renewed.licenseNumber, licenseNumber);
   assert.equal(renewed.licenseCode, undefined);
-  await lifecycle.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await lifecycle.getByRole('button', { name: '返回授权详情', exact: true }).click();
   await expect(lifecycle).toHaveCount(0);
-  details = await showLicenseDetails(page, licenseNumber);
+  await expect(details).toBeVisible();
   const renewedCode = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/code');
   assert.ok(renewedCode.value.data.licenseCode === licenseCode, 'renewal preserves activation code');
 
@@ -722,7 +747,7 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
 
   await details.getByRole('button', { name: '办理换机', exact: true }).click();
   await expect(details).toHaveCount(0);
-  lifecycle = page.getByRole('dialog');
+  lifecycle = lifecyclePage(page);
   await lifecycle.getByLabel('换机原因', { exact: true }).fill('隔离换机验收');
   await lifecycle.getByRole('button', { name: '预览换机', exact: true }).click();
   await expect(lifecycle.getByText(licenseNumber, { exact: true })).toBeVisible();
@@ -742,7 +767,8 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   assert.equal(transferCommand.bindingId, firstReportedDevice.bindingId);
   assert.equal(Object.hasOwn(transferCommand, 'deviceCode'), false);
   assert.equal(Object.hasOwn(transferCommand, 'requestId'), false);
-  await lifecycle.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+  await lifecycle.getByRole('button', { name: '返回授权详情', exact: true }).click();
+  await expect(details).toBeVisible();
 
   const secondActivation = await clientRequest(sourceClientPort, '/client/activate', {
     operationId: randomUUID(),

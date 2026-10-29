@@ -1,7 +1,6 @@
 import { Clock3, KeyRound, LayoutDashboard, LogOut, RefreshCw, Send, Settings, Users } from "lucide-react"
 import { type FormEvent, type ReactNode, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { LocalAPIError, type LocalOwner, localRequest } from "@/lib/local-offline-api"
@@ -13,7 +12,7 @@ import LocalDataSettings, {
   MerchantSettings,
 } from "./local-data-settings"
 import LocalIssue from "./local-issue"
-import LocalLicenses, { type OfflineLicense } from "./local-licenses"
+import LocalLicenses, { LicenseDetailsPage, type OfflineLicense } from "./local-licenses"
 import LocalOverview from "./local-overview"
 import LocalSigningIdentity from "./local-signing"
 
@@ -31,16 +30,26 @@ function Field({ name, label, children }: { name: string; label: string; childre
   )
 }
 const message = (error: unknown) => (error instanceof Error ? error.message : "操作失败，请重试")
+type ReturnLabel = "返回列表" | "返回概览" | "返回客户档案" | "返回授权详情"
+type LicenseDetailsWorkflow = { type: "license-detail"; licenseId: string; returnLabel: ReturnLabel }
+type WorkspaceWorkflow =
+  | { type: "choose-customer"; returnLabel: ReturnLabel }
+  | { type: "new-customer"; returnLabel: ReturnLabel; returnToChoose: true }
+  | LicenseDetailsWorkflow
+  | {
+      type: "issue"
+      customer: CommercialCustomer
+      existing?: { id: string; revision: number; action: "renew" | "transfer"; bindingId?: string }
+      returnLabel: ReturnLabel
+      returnTo?: LicenseDetailsWorkflow
+    }
 
 export default function LocalOfflineApp() {
   const [mode, setMode] = useState<"loading" | "setup" | "login" | "ready" | "error">("loading")
   const [owner, setOwner] = useState<LocalOwner | null>(null)
   const [error, setError] = useState("")
   const [reload, setReload] = useState(0)
-  const [issuing, setIssuing] = useState<{
-    customer: CommercialCustomer
-    existing?: { id: string; revision: number; action: "renew" | "transfer"; bindingId?: string }
-  } | null>(null)
+  const [workflow, setWorkflow] = useState<WorkspaceWorkflow | null>(null)
   const [page, setPage] = useState<"overview" | "customers" | "licenses" | "delivery" | "expiring" | "settings">(
     "customers",
   )
@@ -48,8 +57,6 @@ export default function LocalOfflineApp() {
   const [expiring, setExpiring] = useState(false)
   const [termFilter, setTermFilter] = useState("")
   const [settingsTab, setSettingsTab] = useState("basic")
-  const [choosingCustomer, setChoosingCustomer] = useState(false),
-    [creatingCustomer, setCreatingCustomer] = useState(false)
   const [epoch, setEpoch] = useState(0)
   useEffect(() => {
     document.title = "小团雀客户授权中心"
@@ -91,20 +98,52 @@ export default function LocalOfflineApp() {
   }, [reload])
   const signedOut = () => {
     setOwner(null)
-    setIssuing(null)
+    setWorkflow(null)
     setMode("login")
   }
-  const manageLicense = async (row: OfflineLicense, action: "renew" | "transfer", bindingId?: string) => {
+  const manageLicense = async (
+    row: OfflineLicense,
+    action: "renew" | "transfer",
+    bindingId?: string,
+    returnTo?: LicenseDetailsWorkflow,
+  ) => {
     try {
       const customer = await localRequest<CommercialCustomer>(`/admin/commercial-customers/${row.customerId}`)
-      setIssuing({
+      setWorkflow({
+        type: "issue",
         customer,
         existing: { id: row.id, revision: row.revision, action, ...(bindingId ? { bindingId } : {}) },
+        returnLabel: returnTo ? "返回授权详情" : "返回列表",
+        ...(returnTo ? { returnTo } : {}),
       })
     } catch (cause) {
       setError(message(cause))
     }
   }
+  const workflowPageTitle =
+    workflow?.type === "choose-customer"
+      ? "选择客户"
+      : workflow?.type === "new-customer"
+        ? "新建客户"
+        : workflow?.type === "license-detail"
+          ? "授权详情"
+          : workflow?.type === "issue" && workflow.existing?.action === "renew"
+            ? "续费授权"
+            : workflow?.type === "issue" && workflow.existing?.action === "transfer"
+              ? "办理换机"
+              : workflow?.type === "issue"
+                ? "发放授权"
+                : null
+  const workspacePageTitle =
+    workflowPageTitle ??
+    {
+      overview: "概览",
+      customers: "客户",
+      licenses: "授权",
+      delivery: "交付记录",
+      expiring: "即将到期",
+      settings: "设置",
+    }[page]
   return (
     <div className="snail-local min-h-screen bg-muted/40 text-foreground">
       {mode === "loading" && (
@@ -159,6 +198,7 @@ export default function LocalOfflineApp() {
                   variant="ghost"
                   aria-current={page === key ? "page" : undefined}
                   onClick={() => {
+                    setWorkflow(null)
                     setPage(key)
                     setDeliveryFilter("")
                     setExpiring(false)
@@ -194,16 +234,7 @@ export default function LocalOfflineApp() {
             <header className="lc-topbar">
               <span>
                 客户与授权管理<span className="lc-breadcrumb-separator">/</span>
-                {
-                  {
-                    overview: "概览",
-                    customers: "客户",
-                    licenses: "授权",
-                    delivery: "交付记录",
-                    expiring: "即将到期",
-                    settings: "设置",
-                  }[page]
-                }
+                {workspacePageTitle}
               </span>
               <span>{owner.username}</span>
             </header>
@@ -215,15 +246,27 @@ export default function LocalOfflineApp() {
               )}
               {page === "customers" && (
                 <LocalCustomers
+                  hidden={workflow !== null}
                   epoch={epoch}
-                  onIssue={(customer) => setIssuing({ customer })}
-                  onManage={manageLicense}
+                  onIssue={(customer, from) =>
+                    setWorkflow({
+                      type: "issue",
+                      customer,
+                      returnLabel: from === "customer-detail" ? "返回客户档案" : "返回列表",
+                    })
+                  }
+                  onSelectLicense={(licenseId) =>
+                    setWorkflow({ type: "license-detail", licenseId, returnLabel: "返回客户档案" })
+                  }
                 />
               )}
               {page === "overview" && (
                 <LocalOverview
-                  onCreate={() => setChoosingCustomer(true)}
-                  onManage={manageLicense}
+                  hidden={workflow !== null}
+                  onCreate={() => setWorkflow({ type: "choose-customer", returnLabel: "返回概览" })}
+                  onSelectLicense={(licenseId) =>
+                    setWorkflow({ type: "license-detail", licenseId, returnLabel: "返回概览" })
+                  }
                   epoch={epoch}
                   onNavigate={(target, soon, term, deliveryState) => {
                     setPage(target)
@@ -242,9 +285,11 @@ export default function LocalOfflineApp() {
                   initialExpiring={expiring}
                   initialTermState={termFilter}
                   epoch={epoch}
-                  onCreate={() => setChoosingCustomer(true)}
-                  onManage={manageLicense}
-                  onChanged={() => setEpoch((value) => value + 1)}
+                  hidden={workflow !== null}
+                  onCreate={() => setWorkflow({ type: "choose-customer", returnLabel: "返回列表" })}
+                  onSelectLicense={(licenseId) =>
+                    setWorkflow({ type: "license-detail", licenseId, returnLabel: "返回列表" })
+                  }
                 />
               )}
               {page === "expiring" && (
@@ -253,12 +298,14 @@ export default function LocalOfflineApp() {
                   initialExpiring
                   title="即将到期"
                   epoch={epoch}
-                  onManage={manageLicense}
-                  onChanged={() => setEpoch((value) => value + 1)}
+                  hidden={workflow !== null}
+                  onSelectLicense={(licenseId) =>
+                    setWorkflow({ type: "license-detail", licenseId, returnLabel: "返回列表" })
+                  }
                 />
               )}
               {page === "settings" && (
-                <div className="lc-settings">
+                <div className="lc-settings" hidden={workflow !== null}>
                   <div className="lc-page-heading">
                     <h1>设置</h1>
                     <span className="lc-app-version">
@@ -345,42 +392,58 @@ export default function LocalOfflineApp() {
                   </div>
                 </div>
               )}
+              {(workflow?.type === "choose-customer" ||
+                (workflow?.type === "new-customer" && workflow.returnToChoose)) && (
+                <IssueCustomerPicker
+                  hidden={workflow.type !== "choose-customer"}
+                  returnLabel={workflow.returnLabel}
+                  onClose={() => setWorkflow(null)}
+                  onSelect={(customer) => setWorkflow({ type: "issue", customer, returnLabel: workflow.returnLabel })}
+                  onNew={() =>
+                    setWorkflow({ type: "new-customer", returnLabel: workflow.returnLabel, returnToChoose: true })
+                  }
+                />
+              )}
+              {workflow?.type === "new-customer" && (
+                <CustomerForm
+                  customer="new"
+                  returnLabel="返回客户选择"
+                  onSelectLicense={(licenseId) =>
+                    setWorkflow({ type: "license-detail", licenseId, returnLabel: "返回列表" })
+                  }
+                  onClose={() => setWorkflow({ type: "choose-customer", returnLabel: workflow.returnLabel })}
+                  onSaved={(customer) => {
+                    setEpoch((value) => value + 1)
+                    setWorkflow({ type: "issue", customer, returnLabel: workflow.returnLabel })
+                  }}
+                />
+              )}
+              {workflow?.type === "license-detail" && (
+                <LicenseDetailsPage
+                  id={workflow.licenseId}
+                  epoch={epoch}
+                  returnLabel={workflow.returnLabel}
+                  onClose={() => {
+                    setWorkflow(null)
+                    setEpoch((value) => value + 1)
+                  }}
+                  onManage={(row, action, bindingId) => manageLicense(row, action, bindingId, workflow)}
+                  onChanged={() => setEpoch((value) => value + 1)}
+                />
+              )}
+              {workflow?.type === "issue" && (
+                <LocalIssue
+                  customer={workflow.customer}
+                  existing={workflow.existing}
+                  returnLabel={workflow.returnLabel}
+                  onClose={() => {
+                    setWorkflow(workflow.returnTo ?? null)
+                    setEpoch((value) => value + 1)
+                  }}
+                />
+              )}
             </main>
           </div>
-          {choosingCustomer && (
-            <IssueCustomerPicker
-              onClose={() => setChoosingCustomer(false)}
-              onSelect={(customer) => {
-                setChoosingCustomer(false)
-                setIssuing({ customer })
-              }}
-              onNew={() => {
-                setChoosingCustomer(false)
-                setCreatingCustomer(true)
-              }}
-            />
-          )}
-          {creatingCustomer && (
-            <CustomerForm
-              customer="new"
-              onClose={() => setCreatingCustomer(false)}
-              onSaved={(customer) => {
-                setCreatingCustomer(false)
-                setEpoch((value) => value + 1)
-                setIssuing({ customer })
-              }}
-            />
-          )}
-          {issuing && (
-            <LocalIssue
-              customer={issuing.customer}
-              existing={issuing.existing}
-              onClose={() => {
-                setIssuing(null)
-                setEpoch((value) => value + 1)
-              }}
-            />
-          )}
         </div>
       )}
     </div>
@@ -682,10 +745,14 @@ function AccountSettings({ onSignedOut }: { onSignedOut: () => void }) {
 }
 
 function IssueCustomerPicker({
+  returnLabel,
+  hidden = false,
   onClose,
   onSelect,
   onNew,
 }: {
+  returnLabel: ReturnLabel
+  hidden?: boolean
   onClose: () => void
   onSelect: (customer: CommercialCustomer) => void
   onNew: () => void
@@ -721,84 +788,80 @@ function IssueCustomerPicker({
     }
   }, [submitted, reload])
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <DialogContent className="lc-dialog max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>选择客户</DialogTitle>
-        </DialogHeader>
-        <DialogBody>
-          <form
-            className="lc-customer-picker-search"
-            onSubmit={(event) => {
-              event.preventDefault()
-              setSubmitted(query)
-              setReload((value) => value + 1)
-            }}
-          >
-            <Input
-              aria-label="查询客户"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="客户、联系人、联系方式或来源"
-            />
-            <Button variant="outline" type="submit">
-              查询
-            </Button>
-            <Button variant="outline" type="button" onClick={onNew}>
-              新建客户
-            </Button>
-          </form>
-          {error && (
-            <div role="alert" className="text-destructive">
-              {error}
+    <section className="lc-list-page" hidden={hidden}>
+      <div className="lc-page-heading">
+        <h1>选择客户</h1>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={onClose}>
+            {returnLabel}
+          </Button>
+          <Button onClick={onNew}>新建客户</Button>
+        </div>
+      </div>
+      <div className="lc-list-panel p-5">
+        <form
+          className="lc-customer-picker-search"
+          onSubmit={(event) => {
+            event.preventDefault()
+            setSubmitted(query)
+            setReload((value) => value + 1)
+          }}
+        >
+          <Input
+            aria-label="查询客户"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="客户、联系人、联系方式或来源"
+          />
+          <Button variant="outline" type="submit">
+            查询
+          </Button>
+        </form>
+        {error && (
+          <div role="alert" className="text-destructive">
+            {error}
+          </div>
+        )}
+        <div className="lc-customer-options">
+          {items.map((customer) => (
+            <button
+              type="button"
+              key={customer.id}
+              disabled={!customer.issuanceEnabled || busy || !!error}
+              onClick={() => onSelect(customer)}
+            >
+              <strong>{customer.displayName}</strong>
+              <span>
+                {[
+                  customer.customerType === "company" ? "企业" : "个人",
+                  customer.contactName,
+                  customer.contactMethod,
+                  customer.email,
+                  customer.sourceText,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+              {customer.notes && <span>{customer.notes}</span>}
+              <span>
+                登记时间：
+                {new Intl.DateTimeFormat("zh-CN", {
+                  timeZone: "Asia/Shanghai",
+                  dateStyle: "medium",
+                  timeStyle: "medium",
+                  hour12: false,
+                }).format(new Date(customer.createdAt))}
+              </span>
+            </button>
+          ))}
+          {!items.length && (
+            <div className="lc-empty" role="status">
+              {busy ? "正在读取客户…" : error ? "客户未能读取" : "暂无可选客户"}
             </div>
           )}
-          <div className="lc-customer-options">
-            {items.map((customer) => (
-              <button
-                type="button"
-                key={customer.id}
-                disabled={!customer.issuanceEnabled || busy || !!error}
-                onClick={() => onSelect(customer)}
-              >
-                <strong>{customer.displayName}</strong>
-                <span>
-                  {[
-                    customer.customerType === "company" ? "企业" : "个人",
-                    customer.contactName,
-                    customer.contactMethod,
-                    customer.email,
-                    customer.sourceText,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-                {customer.notes && <span>{customer.notes}</span>}
-                <span>
-                  登记时间：
-                  {new Intl.DateTimeFormat("zh-CN", {
-                    timeZone: "Asia/Shanghai",
-                    dateStyle: "medium",
-                    timeStyle: "medium",
-                    hour12: false,
-                  }).format(new Date(customer.createdAt))}
-                </span>
-              </button>
-            ))}
-            {!items.length && (
-              <div className="lc-empty" role="status">
-                {busy ? "正在读取客户…" : error ? "客户未能读取" : "暂无可选客户"}
-              </div>
-            )}
-          </div>
-        </DialogBody>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </div>
+    </section>
   )
 }
 
