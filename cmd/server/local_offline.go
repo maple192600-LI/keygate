@@ -155,6 +155,8 @@ func newManagedLocalRouter(cfg *config.Config, db *store.Store, activate func(*s
 	deliveries := &handler.OfflineDeliveryHandler{Store: db}
 	owner.GET("/admin/license-issuances/:id/deliveries", deliveries.List)
 	owner.POST("/admin/license-issuances/:id/deliveries", deliveries.Record)
+	owner.GET("/admin/offline-licenses/:id/deliveries", deliveries.ListLicense)
+	owner.POST("/admin/offline-licenses/:id/deliveries", deliveries.RecordLicense)
 	lifecycle := &handler.OfflineLifecycleHandler{Store: db}
 	owner.GET("/admin/overview", lifecycle.Overview)
 	owner.GET("/admin/offline-licenses", lifecycle.List)

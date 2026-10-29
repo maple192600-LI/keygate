@@ -302,6 +302,25 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 		}
 		latestByBinding[bindingID] = history[len(history)-1]
 	}
+	for _, delivery := range b.Tables["license_deliveries"] {
+		licenseID := rowText(delivery, "license_id")
+		license := indexes["licenses"][licenseID]
+		if _, exists := delivery["license_id"]; !exists || license == nil || rowText(license, "fulfillment_mode") != "offline_file" {
+			return bundleError("交付记录缺少所属授权")
+		}
+		issuanceRaw, exists := delivery["issuance_id"]
+		if !exists {
+			return bundleError("交付记录缺少签发关联字段")
+		}
+		if string(issuanceRaw) == "null" {
+			continue
+		}
+		issuanceID := rowText(delivery, "issuance_id")
+		issuance, exists := issuancesByID[issuanceID]
+		if issuanceID == "" || !exists || issuance.payload.LicenseID != licenseID {
+			return bundleError("交付记录与授权签发关联不一致")
+		}
+	}
 	for childID, parentID := range legacyTransferParents {
 		childHistory := issuancesByBinding[childID]
 		parentLatest, exists := latestByBinding[parentID]

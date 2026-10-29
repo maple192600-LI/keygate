@@ -20,7 +20,12 @@ export default function LocalOverview({
   onManage,
   epoch,
 }: {
-  onNavigate: (target: "customers" | "licenses" | "delivery", expiring?: boolean, term?: "active") => void
+  onNavigate: (
+    target: "customers" | "licenses" | "delivery",
+    expiring?: boolean,
+    term?: "active",
+    deliveryState?: "pending" | "recorded",
+  ) => void
   onCreate: () => void
   onManage: LicenseAction
   epoch: number
@@ -48,8 +53,13 @@ export default function LocalOverview({
   const cards = [
     { label: "已登记客户", count: state?.customers, icon: Users, open: () => onNavigate("customers") },
     { label: "有效授权", count: state?.valid, icon: KeyRound, open: () => onNavigate("licenses", false, "active") },
-    { label: "待交付文件", count: state?.pendingDelivery, icon: Send, open: () => onNavigate("delivery") },
-    { label: "30天内到期", count: state?.expiring, icon: CalendarDays, open: () => onNavigate("licenses", true) },
+    {
+      label: "待交付授权码",
+      count: state?.pendingDelivery,
+      icon: Send,
+      open: () => onNavigate("delivery", false, undefined, "pending"),
+    },
+    { label: "15天内到期", count: state?.expiring, icon: CalendarDays, open: () => onNavigate("licenses", true) },
   ]
   return (
     <section className="lc-overview">
@@ -89,7 +99,7 @@ export default function LocalOverview({
             epoch={epoch + refresh}
             compact
             initialExpiring
-            title="30天内到期"
+            title="15天内到期"
             onManage={onManage}
             onChanged={() => setRefresh((value) => value + 1)}
           />
@@ -97,9 +107,9 @@ export default function LocalOverview({
         <aside className="lc-overview-aside">
           <section className="lc-task-panel">
             <h2>待处理</h2>
-            <button type="button" onClick={() => onNavigate("delivery")}>
+            <button type="button" onClick={() => onNavigate("delivery", false, undefined, "pending")}>
               <Send aria-hidden="true" />
-              <span>{state?.pendingDelivery ?? "—"} 份文件待交付</span>
+              <span>{state?.pendingDelivery ?? "—"} 份授权码待交付</span>
               <ChevronRight aria-hidden="true" />
             </button>
             <button type="button" onClick={() => onNavigate("licenses", true)}>

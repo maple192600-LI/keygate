@@ -1,4 +1,4 @@
-import { Clock3, LogOut, RefreshCw, Settings, Users } from "lucide-react"
+import { Clock3, KeyRound, LayoutDashboard, LogOut, RefreshCw, Send, Settings, Users } from "lucide-react"
 import { type FormEvent, type ReactNode, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -14,6 +14,7 @@ import LocalDataSettings, {
 } from "./local-data-settings"
 import LocalIssue from "./local-issue"
 import LocalLicenses, { type OfflineLicense } from "./local-licenses"
+import LocalOverview from "./local-overview"
 import LocalSigningIdentity from "./local-signing"
 
 const attribution = (
@@ -40,7 +41,12 @@ export default function LocalOfflineApp() {
     customer: CommercialCustomer
     existing?: { id: string; revision: number; action: "renew" | "transfer"; bindingId?: string }
   } | null>(null)
-  const [page, setPage] = useState<"customers" | "expiring" | "settings">("customers")
+  const [page, setPage] = useState<"overview" | "customers" | "licenses" | "delivery" | "expiring" | "settings">(
+    "customers",
+  )
+  const [deliveryFilter, setDeliveryFilter] = useState("")
+  const [expiring, setExpiring] = useState(false)
+  const [termFilter, setTermFilter] = useState("")
   const [settingsTab, setSettingsTab] = useState("basic")
   const [choosingCustomer, setChoosingCustomer] = useState(false),
     [creatingCustomer, setCreatingCustomer] = useState(false)
@@ -140,7 +146,10 @@ export default function LocalOfflineApp() {
             <nav aria-label="管理导航">
               {(
                 [
+                  ["overview", "概览", LayoutDashboard],
                   ["customers", "客户", Users],
+                  ["licenses", "授权", KeyRound],
+                  ["delivery", "交付记录", Send],
                   ["expiring", "即将到期", Clock3],
                   ["settings", "设置", Settings],
                 ] as const
@@ -151,6 +160,9 @@ export default function LocalOfflineApp() {
                   aria-current={page === key ? "page" : undefined}
                   onClick={() => {
                     setPage(key)
+                    setDeliveryFilter("")
+                    setExpiring(false)
+                    setTermFilter("")
                     if (key === "settings") setSettingsTab("basic")
                     setError("")
                   }}
@@ -182,7 +194,16 @@ export default function LocalOfflineApp() {
             <header className="lc-topbar">
               <span>
                 客户与授权管理<span className="lc-breadcrumb-separator">/</span>
-                {{ customers: "客户", expiring: "即将到期", settings: "设置" }[page]}
+                {
+                  {
+                    overview: "概览",
+                    customers: "客户",
+                    licenses: "授权",
+                    delivery: "交付记录",
+                    expiring: "即将到期",
+                    settings: "设置",
+                  }[page]
+                }
               </span>
               <span>{owner.username}</span>
             </header>
@@ -197,6 +218,33 @@ export default function LocalOfflineApp() {
                   epoch={epoch}
                   onIssue={(customer) => setIssuing({ customer })}
                   onManage={manageLicense}
+                />
+              )}
+              {page === "overview" && (
+                <LocalOverview
+                  onCreate={() => setChoosingCustomer(true)}
+                  onManage={manageLicense}
+                  epoch={epoch}
+                  onNavigate={(target, soon, term, deliveryState) => {
+                    setPage(target)
+                    setDeliveryFilter(target === "delivery" ? deliveryState || "" : "")
+                    setExpiring(Boolean(soon))
+                    setTermFilter(term || "")
+                    setError("")
+                  }}
+                />
+              )}
+              {(page === "licenses" || page === "delivery") && (
+                <LocalLicenses
+                  key={`${page}-${expiring}-${termFilter}-${deliveryFilter}`}
+                  delivery={page === "delivery"}
+                  initialDeliveryState={deliveryFilter}
+                  initialExpiring={expiring}
+                  initialTermState={termFilter}
+                  epoch={epoch}
+                  onCreate={() => setChoosingCustomer(true)}
+                  onManage={manageLicense}
+                  onChanged={() => setEpoch((value) => value + 1)}
                 />
               )}
               {page === "expiring" && (

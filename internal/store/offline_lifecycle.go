@@ -91,10 +91,10 @@ type OfflineLicenseFilter struct {
 }
 
 const offlineTermSQL = "CASE WHEN l.current_revision=0 THEN 'unactivated' WHEN l.valid_from>now() THEN 'not_yet_valid' WHEN l.valid_until IS NULL THEN 'perpetual' WHEN l.valid_until<=now() THEN 'expired' ELSE 'valid' END"
-const offlineDeliverySQL = "CASE WHEN EXISTS(SELECT 1 FROM license_deliveries d WHERE d.issuance_id=i.id) THEN 'recorded' ELSE 'pending' END"
+const offlineDeliverySQL = "CASE WHEN EXISTS(SELECT 1 FROM license_deliveries d WHERE d.license_id=l.id AND (d.issuance_id IS NULL OR d.issuance_id=i.id)) THEN 'recorded' ELSE 'pending' END"
 
 func (s *Store) offlineLicenseQuery() *bun.SelectQuery {
-	return s.DB.NewSelect().TableExpr("licenses l").ColumnExpr("l.id,'C-'||upper(replace(c.id,'-','')) AS customer_number,'L-'||upper(replace(l.id,'-','')) AS license_number,l.display_number,c.id AS customer_id,c.display_name AS customer_name,c.contact_method,c.source_text,l.device_limit,l.term_kind,l.term_amount,l.term_end_date,l.term_starts_at,CASE WHEN l.current_revision=0 THEN NULL ELSE l.valid_from END AS not_before,l.valid_until AS expires_at,l.current_revision AS revision,COALESCE(i.id,'') AS issuance_id,COALESCE(i.key_id,'') AS key_id,COALESCE(i.file_name,'') AS file_name,COALESCE(i.sha256,'') AS sha256,l.issuance_enabled,c.issuance_enabled AS customer_issuance_enabled, 'unreported' AS usage_state,COALESCE(d.method,'') AS delivery_method,COALESCE(d.recipient,'') AS delivery_recipient,d.delivered_at," + offlineTermSQL + " AS term_state," + offlineDeliverySQL + " AS delivery_state").Join("JOIN commercial_customers c ON c.id=l.customer_id").Join("LEFT JOIN license_issuances i ON i.id=l.current_issuance_id").Join("LEFT JOIN LATERAL (SELECT method,recipient,delivered_at FROM license_deliveries WHERE issuance_id=i.id ORDER BY delivered_at DESC,created_at DESC,id DESC LIMIT 1) d ON true").Where("l.fulfillment_mode='offline_file'")
+	return s.DB.NewSelect().TableExpr("licenses l").ColumnExpr("l.id,'C-'||upper(replace(c.id,'-','')) AS customer_number,'L-'||upper(replace(l.id,'-','')) AS license_number,l.display_number,c.id AS customer_id,c.display_name AS customer_name,c.contact_method,c.source_text,l.device_limit,l.term_kind,l.term_amount,l.term_end_date,l.term_starts_at,CASE WHEN l.current_revision=0 THEN NULL ELSE l.valid_from END AS not_before,l.valid_until AS expires_at,l.current_revision AS revision,COALESCE(i.id,'') AS issuance_id,COALESCE(i.key_id,'') AS key_id,COALESCE(i.file_name,'') AS file_name,COALESCE(i.sha256,'') AS sha256,l.issuance_enabled,c.issuance_enabled AS customer_issuance_enabled, 'unreported' AS usage_state,COALESCE(d.method,'') AS delivery_method,COALESCE(d.recipient,'') AS delivery_recipient,d.delivered_at," + offlineTermSQL + " AS term_state," + offlineDeliverySQL + " AS delivery_state").Join("JOIN commercial_customers c ON c.id=l.customer_id").Join("LEFT JOIN license_issuances i ON i.id=l.current_issuance_id").Join("LEFT JOIN LATERAL (SELECT method,recipient,delivered_at FROM license_deliveries WHERE license_id=l.id AND (issuance_id IS NULL OR issuance_id=i.id) ORDER BY delivered_at DESC,created_at DESC,id DESC LIMIT 1) d ON true").Where("l.fulfillment_mode='offline_file'")
 }
 
 func (s *Store) offlineDeviceViews(ctx context.Context, licenseIDs []string) (map[string][]OfflineDeviceView, error) {
@@ -203,7 +203,7 @@ func (s *Store) OfflineLicenseHistory(ctx context.Context, id string) ([]model.L
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	err = s.DB.NewSelect().Model(&deliveries).Join("JOIN license_issuances i ON i.id=delivery.issuance_id").Where("i.license_id=?", id).OrderExpr("delivery.created_at DESC,delivery.id").Scan(ctx)
+	err = s.DB.NewSelect().Model(&deliveries).Where("license_id=?", id).OrderExpr("created_at DESC,id").Scan(ctx)
 	return issuances, bindings, deliveries, err
 }
 
@@ -224,7 +224,7 @@ func (s *Store) OfflineOverview(ctx context.Context) (OfflineOverview, error) {
  count(*) FILTER(WHERE l.current_revision>0 AND l.valid_from<=now() AND (l.valid_until IS NULL OR l.valid_until>now())) AS valid,
  count(*) FILTER(WHERE l.valid_until<=now()) AS expired,
  count(*) FILTER(WHERE l.current_revision>0 AND l.valid_from<=now() AND l.valid_until>now() AND l.valid_until<=now()+interval '15 days') AS expiring,
- count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM license_deliveries d WHERE d.issuance_id=i.id)) AS pending_delivery,
+ count(*) FILTER(WHERE NOT EXISTS(SELECT 1 FROM license_deliveries d WHERE d.license_id=l.id AND (d.issuance_id IS NULL OR d.issuance_id=i.id))) AS pending_delivery,
  count(*) FILTER(WHERE NOT l.issuance_enabled OR NOT c.issuance_enabled) AS stopped,'unreported' AS usage_state
  FROM licenses l JOIN commercial_customers c ON c.id=l.customer_id LEFT JOIN license_issuances i ON i.id=l.current_issuance_id WHERE l.fulfillment_mode='offline_file'`).Scan(ctx, &row)
 	return row, err

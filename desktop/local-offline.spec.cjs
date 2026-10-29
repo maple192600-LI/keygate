@@ -16,12 +16,12 @@ const { _electron, expect } = requireClient('playwright/test');
 const executablePath = requireClient('electron');
 const mainPath = path.join(__dirname, 'main.cjs');
 
-// Old UI assertions for signed-file download/delivery and device-request files
+// Legacy UI assertions for signed-file download/delivery and device-request files
 // map to Go/API tests: TestLocalOfflineIssuanceHTTP, TestLocalOfflineCustomersAndRequests,
 // TestLocalOfflineElectronBridge, TestClientSyncReturnsSignedTransferAndReplacementActivationKeepsTerm,
 // TestLocalOfflineRestoreSwitchAndRuntimeFailurePreservesSource, and TestOfflineBusinessBundlePreserves*.
-// Current Electron assertions cover code issue/recovery, owner copy/detail, import ownership, backup,
-// and service/window lifecycle.
+// Current Electron assertions cover restored modules, code issue/recovery and delivery history, owner copy/detail,
+// import ownership, backup, and service/window lifecycle.
 function createTaskRoot(prefix) {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
@@ -467,6 +467,19 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
   await login(page, 'source_owner', 'Synthetic-source-recovered-password-2026');
   await expect(page.getByRole('link', { name: 'Powered by Keygate' })).toBeVisible();
 
+  for (const [navigation, heading] of [
+    ['概览', '概览'],
+    ['客户', '客户'],
+    ['授权', '授权'],
+    ['交付记录', '交付记录'],
+    ['即将到期', '即将到期'],
+    ['设置', '设置'],
+  ]) {
+    await expect(page.getByRole('button', { name: navigation, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: navigation, exact: true }).click();
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+  }
+
   await page.getByRole('button', { name: '客户', exact: true }).click();
   await createCustomer(page, 'first@synthetic.invalid');
   await createCustomer(page, 'second@synthetic.invalid');
@@ -573,6 +586,53 @@ test('授权码签发恢复、续期换机、备份移交、账号隔离与服�
     details.getByRole('button', { name: '复制授权码', exact: true }),
     licenseCode,
   );
+
+  await details.getByLabel('交付方式', { exact: true }).selectOption('email');
+  await details.getByLabel('收件对象', { exact: true }).fill('synthetic-recipient@invalid.example');
+  await details.getByLabel('实际交付时间（北京时间）', { exact: true }).fill('2026-10-29T12:30');
+  await details.getByLabel('备注', { exact: true }).fill('合成授权码交付记录');
+  const deliveryResponse = page.waitForResponse(response =>
+    response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/offline-licenses/' + licenseID + '/deliveries'),
+  );
+  await details.getByRole('button', { name: '确认登记交付', exact: true }).click();
+  const deliveryReply = await deliveryResponse;
+  const deliveryInput = deliveryReply.request().postDataJSON();
+  const delivered = (await deliveryReply.json()).data.delivery;
+  assert.match(delivered.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.equal(deliveryInput.deliveredAt, '2026-10-29T04:30:00.000Z');
+  assert.equal(delivered.licenseId, licenseID);
+  assert.equal(delivered.issuanceId, null);
+  assert.equal(delivered.method, 'email');
+  assert.equal(delivered.recipient, 'synthetic-recipient@invalid.example');
+  assert.equal(Date.parse(delivered.deliveredAt), Date.parse(deliveryInput.deliveredAt));
+  await expect(details.locator('dl')).toContainText('已登记交付');
+  await expect(details.getByRole('row').filter({ hasText: 'synthetic-recipient@invalid.example' })).toHaveCount(1);
+  const deliveryHistory = await adminRequest(page, '/admin/offline-licenses/' + licenseID + '/deliveries');
+  assert.equal(deliveryHistory.status, 200);
+  assert.ok(deliveryHistory.value.data.items.some(item => item.id === delivered.id));
+  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+
+  await page.getByRole('button', { name: '交付记录', exact: true }).click();
+  const deliveryRow = page.getByRole('row').filter({ hasText: licenseNumber });
+  await expect(deliveryRow).toHaveCount(1);
+  const deliveryStateFilter = page.getByLabel('交付状态', { exact: true });
+  await deliveryStateFilter.selectOption('pending');
+  await expect(deliveryRow).toHaveCount(0);
+  await deliveryStateFilter.selectOption('recorded');
+  await expect(deliveryRow).toHaveCount(1);
+  await expect(deliveryRow).toContainText('邮件');
+  await expect(deliveryRow).toContainText('synthetic-recipient@invalid.example');
+  await deliveryRow.getByRole('button', { name: '查看记录', exact: true }).click();
+  details = page.getByRole('dialog', { name: '授权详情', exact: true });
+  await expect(details.getByRole('heading', { name: '交付记录', exact: true })).toBeVisible();
+  await expect(details.getByRole('row').filter({ hasText: 'synthetic-recipient@invalid.example' })).toHaveCount(1);
+  await details.getByRole('button', { name: /^(关闭|Close)$/ }).click();
+
+  await page.getByRole('button', { name: '授权', exact: true }).click();
+  await page.getByLabel('查询授权', { exact: true }).fill(licenseNumber);
+  await page.getByRole('button', { name: '查询', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: licenseNumber })).toHaveCount(1);
+  details = await showLicenseDetails(page, licenseNumber);
 
   const firstDevice = {
     type: 'windows-smbios-uuid-sha256/v1',

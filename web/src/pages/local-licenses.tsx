@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react"
+import { type FormEvent, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { localRequest } from "@/lib/local-offline-api"
+import { LocalAPIError, localRequest } from "@/lib/local-offline-api"
 import IssuanceStateForm from "./local-state-form"
 export type OfflineLicense = {
   id: string
@@ -25,6 +26,10 @@ export type OfflineLicense = {
   expiresAt: string | null
   revision: number
   termState: "unactivated" | "not_yet_valid" | "valid" | "expired" | "perpetual"
+  deliveryState: "pending" | "recorded"
+  deliveryMethod: string
+  deliveryRecipient: string
+  deliveredAt: string | null
   issuanceEnabled: boolean
   customerIssuanceEnabled: boolean
 }
@@ -36,6 +41,18 @@ type Issuance = {
   expiresAt: string | null
   issuedAt: string
 }
+type Delivery = {
+  id: string
+  licenseId: string
+  issuanceId: string | null
+  operationId: string
+  method: string
+  recipient: string
+  deliveredAt: string
+  notes: string
+  createdBy: string
+  createdAt: string
+}
 type Device = {
   bindingId: string
   deviceLabel: string
@@ -45,6 +62,7 @@ type Device = {
   lastReportedAt: string | null
 }
 const terms = { unactivated: "未激活", not_yet_valid: "待生效", valid: "使用中", expired: "已到期", perpetual: "永久" }
+const deliveryMethods: Record<string, string> = { wechat: "微信", email: "邮件", usb: "U盘", other: "其他" }
 const licenseNumber = (id: string) => `L-${id.replaceAll("-", "").toUpperCase()}`
 const termText = (term: NonNullable<OfflineLicense["term"]>) => {
   if (term.kind === "perpetual") return "永久"
@@ -63,20 +81,24 @@ const dateText = (value: string | null) =>
 export type LicenseAction = (row: OfflineLicense, action: "renew" | "transfer", bindingId?: string) => void
 
 export default function LocalLicenses({
+  delivery = false,
   customerId,
   compact = false,
   initialExpiring = false,
   initialTermState = "",
+  initialDeliveryState = "",
   title,
   epoch = 0,
   onCreate,
   onManage,
   onChanged,
 }: {
+  delivery?: boolean
   customerId?: string
   compact?: boolean
   initialExpiring?: boolean
   initialTermState?: string
+  initialDeliveryState?: string
   title?: string
   epoch?: number
   onCreate?: () => void
@@ -88,6 +110,7 @@ export default function LocalLicenses({
     [query, setQuery] = useState(""),
     [submitted, setSubmitted] = useState("")
   const [term, setTerm] = useState(initialTermState),
+    [deliveryState, setDeliveryState] = useState(initialDeliveryState),
     [page, setPage] = useState(1),
     [reload, setReload] = useState(0),
     [error, setError] = useState(""),
@@ -100,6 +123,7 @@ export default function LocalLicenses({
     const params = new URLSearchParams({
       q: submitted,
       termState: term,
+      deliveryState,
       page: String(page),
       pageSize: compact ? "5" : "20",
       ...(customerId ? { customerId } : {}),
@@ -122,12 +146,12 @@ export default function LocalLicenses({
     return () => {
       alive = false
     }
-  }, [submitted, term, page, reload, customerId, initialExpiring, compact, epoch])
+  }, [submitted, term, deliveryState, page, reload, customerId, initialExpiring, compact, epoch])
   return (
     <section className={compact ? "lc-list-page lc-compact-list" : "lc-list-page"}>
       {!compact && (
         <div className="lc-page-heading">
-          <h1>{title || "授权"}</h1>
+          <h1>{title || (delivery ? "交付记录" : "授权")}</h1>
           {onCreate && <Button onClick={onCreate}>发放授权</Button>}
         </div>
       )}
@@ -151,7 +175,7 @@ export default function LocalLicenses({
               <Input
                 className="w-72"
                 aria-label="查询授权"
-                placeholder="客户、客户编号、授权编号、联系方式或设备"
+                placeholder="客户、编号、联系方式、来源或设备"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -183,19 +207,44 @@ export default function LocalLicenses({
                 ))}
               </select>
               {initialExpiring && <span className="self-center text-sm">未来15天内</span>}
+              <select
+                aria-label="交付状态"
+                className="h-9 rounded-md border border-input px-3"
+                value={deliveryState}
+                onChange={(event) => {
+                  setDeliveryState(event.target.value)
+                  setPage(1)
+                }}
+              >
+                <option value="">全部交付</option>
+                <option value="pending">待交付</option>
+                <option value="recorded">已登记交付</option>
+              </select>
             </div>
           )}
         </div>
         <div className="overflow-x-auto">
-          <Table className={compact ? "lc-compact-table" : "lc-license-table"}>
+          <Table className={compact ? "lc-compact-table" : delivery ? "lc-delivery-table" : "lc-license-table"}>
             <TableHeader>
               <TableRow>
                 <TableHead>客户／授权编号</TableHead>
-                {!compact && <TableHead>绑定设备</TableHead>}
-                <TableHead>期限状态</TableHead>
-                <TableHead>截止时间</TableHead>
-                <TableHead>设备状态</TableHead>
-                {!compact && <TableHead>续发</TableHead>}
+                {!compact && !delivery && <TableHead>绑定设备</TableHead>}
+                {delivery ? (
+                  <>
+                    <TableHead>交付状态</TableHead>
+                    <TableHead>方式</TableHead>
+                    <TableHead>收件对象</TableHead>
+                    <TableHead>交付时间</TableHead>
+                  </>
+                ) : (
+                  <>
+                    <TableHead>期限状态</TableHead>
+                    <TableHead>截止时间</TableHead>
+                    <TableHead>设备状态</TableHead>
+                    {!compact && <TableHead>交付状态</TableHead>}
+                    {!compact && <TableHead>续发</TableHead>}
+                  </>
+                )}
                 <TableHead>操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -207,7 +256,7 @@ export default function LocalLicenses({
                     <span className="lc-record-number">{row.customerNumber}</span>
                     <span className="lc-record-number">{licenseNumber(row.id)}</span>
                   </TableCell>
-                  {!compact && (
+                  {!compact && !delivery && (
                     <TableCell>
                       {row.devices
                         ?.filter((device) => device.deviceState === "current")
@@ -215,22 +264,48 @@ export default function LocalLicenses({
                         .join("、") || "未激活"}
                     </TableCell>
                   )}
-                  <TableCell>
-                    <span className={`lc-status lc-status-${row.termState}`}>{terms[row.termState]}</span>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {row.termState === "unactivated" ? "首次激活后起算" : dateText(row.expiresAt)}
-                  </TableCell>
-                  <TableCell>
-                    {row.devices?.some((device) => device.deviceState === "current") ? "已绑定" : "未激活"}
-                  </TableCell>
-                  {!compact && (
-                    <TableCell>{row.issuanceEnabled && row.customerIssuanceEnabled ? "可续发" : "已停发"}</TableCell>
+                  {delivery ? (
+                    <>
+                      <TableCell>
+                        <span className={`lc-status lc-status-${row.deliveryState}`}>
+                          {row.deliveryState === "recorded" ? "已登记交付" : "待交付"}
+                        </span>
+                      </TableCell>
+                      <TableCell>{deliveryMethods[row.deliveryMethod] || "—"}</TableCell>
+                      <TableCell>{row.deliveryRecipient || "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {row.deliveredAt ? dateText(row.deliveredAt) : "—"}
+                      </TableCell>
+                    </>
+                  ) : (
+                    <>
+                      <TableCell>
+                        <span className={`lc-status lc-status-${row.termState}`}>{terms[row.termState]}</span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {row.termState === "unactivated" ? "首次激活后起算" : dateText(row.expiresAt)}
+                      </TableCell>
+                      <TableCell>
+                        {row.devices?.some((device) => device.deviceState === "current") ? "已绑定" : "未激活"}
+                      </TableCell>
+                      {!compact && (
+                        <TableCell>
+                          <span className={`lc-status lc-status-${row.deliveryState}`}>
+                            {row.deliveryState === "recorded" ? "已登记交付" : "待交付"}
+                          </span>
+                        </TableCell>
+                      )}
+                      {!compact && (
+                        <TableCell>
+                          {row.issuanceEnabled && row.customerIssuanceEnabled ? "可续发" : "已停发"}
+                        </TableCell>
+                      )}
+                    </>
                   )}
                   <TableCell>
                     <div className="lc-row-actions">
                       <Button variant="link" size="sm" onClick={() => setSelected(row.id)}>
-                        查看详情
+                        {delivery ? (row.deliveryState === "pending" ? "登记交付" : "查看记录") : "查看详情"}
                       </Button>
                     </div>
                   </TableCell>
@@ -238,9 +313,9 @@ export default function LocalLicenses({
               ))}
               {!items.length && (
                 <TableRow>
-                  <TableCell colSpan={compact ? 5 : 7}>
+                  <TableCell colSpan={compact ? 5 : delivery ? 6 : 8}>
                     <div className="lc-empty" role="status">
-                      {busy ? "正在读取授权…" : error ? "授权未能读取" : "暂无授权"}
+                      {busy ? "正在读取授权…" : error ? "授权未能读取" : delivery ? "暂无交付记录" : "暂无授权"}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -313,6 +388,7 @@ function LicenseDetails({
   const [data, setData] = useState<{
       license: OfflineLicense
       issuances: Issuance[]
+      deliveries: Delivery[]
     } | null>(null),
     [error, setError] = useState(""),
     [reload, setReload] = useState(0),
@@ -399,6 +475,8 @@ function LicenseDetails({
                 <dd>{row.deviceLimit} 台</dd>
                 <dt>当前版本</dt>
                 <dd>{row.revision}</dd>
+                <dt>交付状态</dt>
+                <dd>{row.deliveryState === "recorded" ? "已登记交付" : "待交付"}</dd>
               </dl>
               <div className="flex gap-3">
                 <Button variant="outline" disabled={codeBusy} onClick={() => void toggleCode()}>
@@ -430,6 +508,42 @@ function LicenseDetails({
                   onChanged?.()
                 }}
               />
+              {row.deliveryState === "pending" && (
+                <DeliveryForm
+                  licenseId={row.id}
+                  onRecorded={() => {
+                    setReload((value) => value + 1)
+                    onChanged?.()
+                  }}
+                />
+              )}
+              <section className="grid gap-3">
+                <h3 className="font-semibold">交付记录</h3>
+                {data.deliveries.length ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>方式</TableHead>
+                        <TableHead>收件对象</TableHead>
+                        <TableHead>时间</TableHead>
+                        <TableHead>备注</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.deliveries.map((value) => (
+                        <TableRow key={value.id}>
+                          <TableCell>{deliveryMethods[value.method] || value.method}</TableCell>
+                          <TableCell>{value.recipient}</TableCell>
+                          <TableCell>{dateText(value.deliveredAt)}</TableCell>
+                          <TableCell>{value.notes || "—"}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <span className="text-sm text-muted-foreground">暂无交付记录</span>
+                )}
+              </section>
               <section className="grid gap-3">
                 <h3 className="font-semibold">历次签发</h3>
                 <Table>
@@ -505,5 +619,112 @@ function LicenseDetails({
         </div>
       </SheetContent>
     </Sheet>
+  )
+}
+
+function DeliveryForm({ licenseId, onRecorded }: { licenseId: string; onRecorded: () => void }) {
+  const [method, setMethod] = useState("wechat"),
+    [recipient, setRecipient] = useState(""),
+    [date, setDate] = useState(""),
+    [notes, setNotes] = useState("")
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [uncertain, setUncertain] = useState(false),
+    [saved, setSaved] = useState(false)
+  const attempt = useRef<{
+    operationId: string
+    method: string
+    recipient: string
+    deliveredAt: string
+    notes: string
+  } | null>(null)
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError("")
+    try {
+      attempt.current ??= {
+        operationId: crypto.randomUUID(),
+        method,
+        recipient,
+        deliveredAt: new Date(`${date}:00+08:00`).toISOString(),
+        notes,
+      }
+      await localRequest(`/admin/offline-licenses/${licenseId}/deliveries`, attempt.current)
+      setSaved(true)
+      setUncertain(false)
+      onRecorded()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "操作失败，请重试")
+      const unknown = cause instanceof LocalAPIError && cause.status >= 500
+      setUncertain(unknown)
+      if (!unknown) attempt.current = null
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (saved) return <div role="status">已登记交付</div>
+  return (
+    <form className="grid grid-cols-2 gap-4 border-t pt-5" onSubmit={submit}>
+      <h3 className="col-span-2 font-medium">登记交付</h3>
+      <div className="grid gap-2">
+        <Label htmlFor="delivery-method">交付方式</Label>
+        <select
+          id="delivery-method"
+          className="h-9 rounded-md border border-input px-3"
+          value={method}
+          onChange={(event) => setMethod(event.target.value)}
+          disabled={busy || uncertain}
+        >
+          <option value="wechat">微信</option>
+          <option value="email">邮件</option>
+          <option value="usb">U盘</option>
+          <option value="other">其他</option>
+        </select>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="delivery-recipient">收件对象</Label>
+        <Input
+          id="delivery-recipient"
+          value={recipient}
+          onChange={(event) => setRecipient(event.target.value)}
+          maxLength={200}
+          disabled={busy || uncertain}
+          required
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="delivery-date">实际交付时间（北京时间）</Label>
+        <Input
+          id="delivery-date"
+          type="datetime-local"
+          value={date}
+          onChange={(event) => setDate(event.target.value)}
+          disabled={busy || uncertain}
+          required
+        />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="delivery-notes">备注</Label>
+        <Input
+          id="delivery-notes"
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+          maxLength={2000}
+          disabled={busy || uncertain}
+        />
+      </div>
+      {error && (
+        <div role="alert" className="col-span-2 text-destructive">
+          {error}
+        </div>
+      )}
+      <div className="col-span-2">
+        <Button variant="outline" type="submit" disabled={busy}>
+          {busy ? "正在保存…" : uncertain ? "按原操作重试登记" : "确认登记交付"}
+        </Button>
+      </div>
+    </form>
   )
 }

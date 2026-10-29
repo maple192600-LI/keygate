@@ -129,7 +129,8 @@ func TestOfflineBusinessBundlePreservesUnactivatedLicenseFacts(t *testing.T) {
 		StartsAt    string `bun:"starts_at"`
 	}
 	expected := map[string]licenseFacts{}
-	for _, test := range []struct {
+	var deliveredLicenseID, deliveryID string
+	for i, test := range []struct {
 		deviceLimit int
 		term        offline.Term
 		endDate     string
@@ -144,6 +145,16 @@ func TestOfflineBusinessBundlePreservesUnactivatedLicenseFacts(t *testing.T) {
 			t.Fatal("create unactivated code", err)
 		}
 		expected[created.LicenseID] = licenseFacts{ID: created.LicenseID, DeviceLimit: test.deviceLimit, TermKind: test.term.Kind, TermAmount: test.term.Amount, EndDate: test.endDate, StartsAt: startDate}
+		if i == 0 {
+			row, _, recordErr := svc.Store.RecordOfflineDelivery(ctx, &store.OfflineDelivery{
+				LicenseID: created.LicenseID, OperationID: store.NewID(), Method: "email", Recipient: "合成授权码收件人",
+				DeliveredAt: base, Notes: "未激活授权码交付", CreatedBy: actor,
+			})
+			if recordErr != nil {
+				t.Fatal("record unactivated code delivery", recordErr)
+			}
+			deliveredLicenseID, deliveryID = created.LicenseID, row.ID
+		}
 	}
 	var source []licenseFacts
 	if err := svc.Store.DB.NewRaw(`SELECT id,device_limit,term_kind,term_amount,
@@ -177,6 +188,13 @@ FROM licenses WHERE fulfillment_mode='offline_file' ORDER BY id`).Scan(ctx, &sou
 	if err != nil {
 		t.Fatal("parse unactivated codes", err)
 	}
+	var exportedDeliveryLicenseID string
+	if len(bundle.Tables["license_deliveries"]) == 1 {
+		_ = json.Unmarshal(bundle.Tables["license_deliveries"][0]["license_id"], &exportedDeliveryLicenseID)
+	}
+	if len(bundle.Tables["license_deliveries"]) != 1 || string(bundle.Tables["license_deliveries"][0]["issuance_id"]) != "null" || exportedDeliveryLicenseID != deliveredLicenseID {
+		t.Fatal("business bundle lost license-level delivery without a signed issuance")
+	}
 	codes := licenseCodesForBundle(t, ctx, svc.Store, actor, bundle)
 	target, _, targetActor := blankBackupTarget(t)
 	if _, err = target.ImportBusinessBundle(ctx, bundle, codes, targetActor, true); err != nil {
@@ -202,6 +220,14 @@ FROM licenses WHERE fulfillment_mode='offline_file' ORDER BY id`).Scan(ctx, &act
 		if codeErr != nil || got != want {
 			t.Fatalf("import changed original unactivated license code: got=%q err=%v", got, codeErr)
 		}
+	}
+	deliveries, err := target.OfflineLicenseDeliveries(ctx, deliveredLicenseID)
+	if err != nil || len(deliveries) != 1 || deliveries[0].ID != deliveryID || deliveries[0].IssuanceID != nil {
+		t.Fatalf("business import changed unactivated code delivery history: %+v err=%v", deliveries, err)
+	}
+	imported, err := target.OfflineLicense(ctx, deliveredLicenseID)
+	if err != nil || imported.TermState != "unactivated" || imported.DeliveryState != "recorded" || imported.ExpiresAt != nil {
+		t.Fatalf("business import changed unactivated delivery/term state: %+v err=%v", imported, err)
 	}
 }
 
@@ -616,7 +642,8 @@ func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivered, _, err := source.Store.RecordOfflineDelivery(ctx, &store.OfflineDelivery{IssuanceID: first.IssuanceID, OperationID: store.NewID(), Method: "usb", Recipient: "合成客户", DeliveredAt: base, CreatedBy: actor})
+	issuanceID := first.IssuanceID
+	delivered, _, err := source.Store.RecordOfflineDelivery(ctx, &store.OfflineDelivery{IssuanceID: &issuanceID, OperationID: store.NewID(), Method: "usb", Recipient: "合成客户", DeliveredAt: base, CreatedBy: actor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -722,7 +749,7 @@ func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Malformed relations and plan definition conflicts leave a fresh target empty.
-	for _, kind := range []string{"hash", "revision", "relationship", "plan", "unknown-column"} {
+	for _, kind := range []string{"hash", "revision", "relationship", "delivery-license", "plan", "unknown-column"} {
 		t.Run(kind, func(t *testing.T) {
 			fresh, _, owner := blankBackupTarget(t)
 			opened, err := backup.OpenBusiness(raw, password)
@@ -737,6 +764,8 @@ func TestOfflineBusinessTransferPreservesOriginalsAndRenews(t *testing.T) {
 				b.Tables["licenses"][0]["current_revision"] = json.RawMessage(`2`)
 			case "relationship":
 				b.Tables["license_deliveries"][0]["issuance_id"] = json.RawMessage(`"` + store.NewID() + `"`)
+			case "delivery-license":
+				b.Tables["license_deliveries"][0]["license_id"] = json.RawMessage(`"` + store.NewID() + `"`)
 			case "plan":
 				b.Tables["plans"][0]["max_activations"] = json.RawMessage(`12`)
 			case "unknown-column":
@@ -763,6 +792,14 @@ func intentCustomer(t *testing.T, s *store.Store, licenseID string) string {
 func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 	ctx := context.Background()
 	_, source, actor, first, _ := sourceBackupService(t)
+	legacyIssuanceID := first.IssuanceID
+	legacyDelivery, _, err := source.Store.RecordOfflineDelivery(ctx, &store.OfflineDelivery{
+		IssuanceID: &legacyIssuanceID, OperationID: store.NewID(), Method: "usb", Recipient: "合成历史收件人",
+		DeliveredAt: time.Now().UTC(), CreatedBy: actor,
+	})
+	if err != nil {
+		t.Fatal("record legacy issuance delivery", err)
+	}
 	snapshot, err := source.Store.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -894,6 +931,11 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 	setValue(issuanceRow, "created_at", fixtureTime(payload.IssuedAt))
 	setValue(issuanceRow, "raw_bytes", `\x`+hex.EncodeToString(legacyLicense))
 	setValue(issuanceRow, "sha256", hex.EncodeToString(licenseHash[:]))
+	for _, delivery := range snapshot.Tables["license_deliveries"] {
+		if readText(delivery, "issuance_id") == first.IssuanceID {
+			setValue(delivery, "issuance_id", payload.IssuanceID)
+		}
+	}
 	for _, audit := range snapshot.Tables["audit_logs"] {
 		if readText(audit, "entity") == "offline-license" && readText(audit, "entity_id") == first.LicenseID {
 			setValue(audit, "entity_id", payload.LicenseID)
@@ -979,6 +1021,10 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 	if err = previous.DB.NewRaw("SELECT display_name FROM offline_actors WHERE id=?", actor).Scan(ctx, &name); err != nil || name != "service_owner" {
 		t.Fatal("actor backfill", name, err)
 	}
+	var migratedDelivery store.OfflineDelivery
+	if err = previous.DB.NewSelect().Model(&migratedDelivery).Where("id=?", legacyDelivery.ID).Scan(ctx); err != nil || migratedDelivery.LicenseID != payload.LicenseID || migratedDelivery.IssuanceID == nil || *migratedDelivery.IssuanceID != payload.IssuanceID || migratedDelivery.CreatedBy != actor {
+		t.Fatal("license delivery scope migration changed legacy record provenance", err, migratedDelivery)
+	}
 	after, err := previous.LicenseIssuance(ctx, payload.IssuanceID)
 	if err != nil || !bytes.Equal(before.RawBytes, after.RawBytes) || before.SHA256 != after.SHA256 || before.CreatedBy != after.CreatedBy {
 		t.Fatal("upgrade changed signed original or provenance", err)
@@ -993,7 +1039,24 @@ func TestOfflineActorMigrationPreservesEarlierTaskIssuance(t *testing.T) {
 }
 func TestOfflineEncryptedBackupPreviewAndFailureProtection(t *testing.T) {
 	ctx := context.Background()
-	backup, source, _, first, _ := sourceBackupService(t)
+	backup, source, actor, first, base := sourceBackupService(t)
+	var customerID string
+	if err := source.Store.DB.NewRaw("SELECT customer_id FROM licenses WHERE id=?", first.LicenseID).Scan(ctx, &customerID); err != nil {
+		t.Fatal("read customer for unactivated license", err)
+	}
+	unactivated, err := source.Issue(ctx, actor, prepareOfflineCommand(t, source, OfflineIntent{
+		Action: "initial", CustomerID: customerID, DeviceLimit: 2, Term: offline.Term{Kind: "perpetual"},
+	}))
+	if err != nil {
+		t.Fatal("create unactivated code for full backup", err)
+	}
+	unactivatedDelivery, _, err := source.Store.RecordOfflineDelivery(ctx, &store.OfflineDelivery{
+		LicenseID: unactivated.LicenseID, OperationID: store.NewID(), Method: "wechat", Recipient: "合成恢复收件人",
+		DeliveredAt: base, Notes: "未激活授权码交付", CreatedBy: actor,
+	})
+	if err != nil {
+		t.Fatal("record unactivated code delivery for full backup", err)
+	}
 	password := "Synthetic-independent-backup-password"
 	if _, err := backup.Backup(ctx, password, true, false); err == nil {
 		t.Fatal("identity confirmation not required")
@@ -1025,13 +1088,21 @@ func TestOfflineEncryptedBackupPreviewAndFailureProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate.Summary.Customers != 1 || candidate.Summary.Licenses != 1 || candidate.Summary.Originals != 1 || !candidate.IncludesIdentity {
+	if candidate.Summary.Customers != 1 || candidate.Summary.Licenses != 2 || candidate.Summary.Originals != 1 || !candidate.IncludesIdentity {
 		t.Fatal("restore preview", candidate.Summary)
 	}
 	original, _ := source.Store.LicenseIssuance(ctx, first.IssuanceID)
 	restored, err := candidate.Store.LicenseIssuance(ctx, first.IssuanceID)
 	if err != nil || !bytes.Equal(original.RawBytes, restored.RawBytes) {
 		t.Fatal("restored original mismatch", err)
+	}
+	restoredLicense, err := candidate.Store.OfflineLicense(ctx, unactivated.LicenseID)
+	if err != nil || restoredLicense.Revision != 0 || restoredLicense.TermState != "unactivated" || restoredLicense.DeliveryState != "recorded" || restoredLicense.ExpiresAt != nil {
+		t.Fatalf("full backup restore changed unactivated delivery or term: %+v err=%v", restoredLicense, err)
+	}
+	restoredDeliveries, err := candidate.Store.OfflineLicenseDeliveries(ctx, unactivated.LicenseID)
+	if err != nil || len(restoredDeliveries) != 1 || restoredDeliveries[0].ID != unactivatedDelivery.ID || restoredDeliveries[0].IssuanceID != nil || restoredDeliveries[0].CreatedBy != actor {
+		t.Fatalf("full backup restore changed code delivery history: %+v err=%v", restoredDeliveries, err)
 	}
 	restoredKeys := offline.NewKeyStore(candidate.IdentityRoot)
 	if _, err = restoredKeys.Unlock("Synthetic-service-signing-password", time.Now().Add(time.Minute)); err != nil {
