@@ -10,7 +10,8 @@ func (s *Store) CommercialCustomers(ctx context.Context, search string, page, si
 	out := []model.CommercialCustomer{}
 	q := s.DB.NewSelect().Model(&out)
 	if search != "" {
-		q.Where("display_name ILIKE ? OR contact_name ILIKE ? OR contact_method ILIKE ? OR source_text ILIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+		term := "%" + search + "%"
+		q.Where("(display_name ILIKE ? OR contact_name ILIKE ? OR contact_method ILIKE ? OR source_text ILIKE ? OR ('C-'||upper(replace(id,'-',''))) ILIKE ? OR EXISTS (SELECT 1 FROM licenses l WHERE l.fulfillment_mode='offline_file' AND l.customer_id=commercial_customer.id AND ('L-'||upper(replace(l.id,'-',''))) ILIKE ?))", term, term, term, term, term, term)
 	}
 	count, err := q.OrderExpr("created_at DESC, id").Limit(size).Offset((page - 1) * size).ScanAndCount(ctx)
 	if err == nil && len(out) > 0 {

@@ -132,12 +132,11 @@ export function MerchantSettings() {
   )
 }
 export default function LocalDataSettings({ onImported }: { onImported: () => void }) {
-  const [mode, setMode] = useState<"" | "backup" | "bundle" | "restore">(""),
+  const [mode, setMode] = useState<"" | "backup" | "bundle-export" | "bundle" | "restore">(""),
     [file, setFile] = useState<File | null>(null),
     [password, setPassword] = useState(""),
     [confirm, setConfirm] = useState(""),
-    [ownerPassword, setOwner] = useState(""),
-    [include, setInclude] = useState(false)
+    [ownerPassword, setOwner] = useState("")
   const [signingPassphrase, setSigningPassphrase] = useState(""),
     [needsSigningPassphrase, setNeedsSigningPassphrase] = useState(false)
   const [preview, setPreview] = useState<Preview | null>(null),
@@ -174,22 +173,26 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
     setOwner("")
     setSigningPassphrase("")
     setNeedsSigningPassphrase(false)
-    setInclude(false)
     setPreview(null)
     setError("")
   }
   async function submit(e: FormEvent) {
     e.preventDefault()
     await perform(async () => {
-      if (mode === "backup") {
-        if (password !== confirm) throw new Error("两次备份密码输入不一致")
-        if (include && !window.confirm("备份将包含加密签发身份。请只保存在厂商控制的位置，是否继续？")) return
-        await localDownload("/admin/backups", "蜗牛管理资料.snailbackup", {
-          password,
-          includeIdentity: include,
-          confirmIdentity: include,
-        })
-        setNotice("备份文件已生成")
+      if (mode === "backup" || mode === "bundle-export") {
+        if (password !== confirm) throw new Error("两次密码输入不一致")
+        if (mode === "backup") {
+          if (!window.confirm("备份将包含加密的授权服务身份。请将备份文件和密码分开保管，是否继续？")) return
+          await localDownload("/admin/backups", "小团雀管理资料.snailbackup", {
+            password,
+            includeIdentity: true,
+            confirmIdentity: true,
+          })
+          setNotice("备份文件已生成")
+        } else {
+          await localDownload("/admin/business-bundle/export", "小团雀管理数据.snailbundle", { password })
+          setNotice("加密移交包已生成")
+        }
         reset()
         return
       }
@@ -199,7 +202,7 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
           await localFileRequest<Preview>(
             mode === "bundle" ? "/admin/business-bundle/preview" : "/admin/backups/preview",
             file,
-            mode === "restore" ? password : undefined,
+            mode === "restore" || mode === "bundle" ? password : undefined,
           ),
         )
         setPassword("")
@@ -235,12 +238,10 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
         <Button
           variant="outline"
           disabled={busy}
-          onClick={() =>
-            void perform(async () => {
-              await localDownload("/admin/business-bundle/export", "蜗牛管理数据.snailbundle", {})
-              setNotice("管理数据包已生成")
-            })
-          }
+          onClick={() => {
+            setNotice("")
+            setMode("bundle-export")
+          }}
         >
           导出管理数据
         </Button>
@@ -286,12 +287,18 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
         >
           <DialogHeader>
             <DialogTitle>
-              {mode === "backup" ? "备份资料" : mode === "bundle" ? "导入管理数据" : "恢复备份"}
+              {mode === "backup"
+                ? "备份资料"
+                : mode === "bundle-export"
+                  ? "导出管理数据"
+                  : mode === "bundle"
+                    ? "导入管理数据"
+                    : "恢复备份"}
             </DialogTitle>
           </DialogHeader>
           <DialogBody>
             <form className="grid gap-5" onSubmit={submit}>
-              {mode !== "backup" && !preview && (
+              {mode !== "backup" && mode !== "bundle-export" && !preview && (
                 <div className="grid gap-2">
                   <Label htmlFor="management-file">{mode === "bundle" ? "管理数据包" : "加密备份文件"}</Label>
                   <Input
@@ -304,44 +311,41 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
                   />
                 </div>
               )}
-              {(mode === "backup" || (mode === "restore" && !preview)) && (
+              {(mode === "backup" ||
+                mode === "bundle-export" ||
+                ((mode === "restore" || mode === "bundle") && !preview)) && (
                 <div className="grid gap-2">
-                  <Label htmlFor="backup-password">备份密码</Label>
+                  <Label htmlFor="backup-password">
+                    {mode === "bundle" || mode === "bundle-export" ? "移交包密码" : "备份密码"}
+                  </Label>
                   <Input
                     id="backup-password"
                     type="password"
                     value={password}
                     autoComplete="off"
                     disabled={busy}
+                    minLength={10}
+                    maxLength={128}
                     required
                     onChange={(e) => setPassword(e.target.value)}
                   />
                 </div>
               )}
-              {mode === "backup" && (
-                <>
-                  <div className="grid gap-2">
-                    <Label htmlFor="backup-confirm">确认备份密码</Label>
-                    <Input
-                      id="backup-confirm"
-                      type="password"
-                      value={confirm}
-                      autoComplete="off"
-                      disabled={busy}
-                      required
-                      onChange={(e) => setConfirm(e.target.value)}
-                    />
-                  </div>
-                  <Label className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      checked={include}
-                      disabled={busy}
-                      onChange={(e) => setInclude(e.target.checked)}
-                    />
-                    包含加密签发身份
-                  </Label>
-                </>
+              {(mode === "backup" || mode === "bundle-export") && (
+                <div className="grid gap-2">
+                  <Label htmlFor="backup-confirm">确认密码</Label>
+                  <Input
+                    id="backup-confirm"
+                    type="password"
+                    value={confirm}
+                    autoComplete="off"
+                    disabled={busy}
+                    minLength={10}
+                    maxLength={128}
+                    required
+                    onChange={(e) => setConfirm(e.target.value)}
+                  />
+                </div>
               )}
               {preview && (
                 <>
@@ -426,11 +430,13 @@ export default function LocalDataSettings({ onImported }: { onImported: () => vo
                     ? "正在处理…"
                     : mode === "backup"
                       ? "生成备份"
-                      : !preview
-                        ? "验证并预览"
-                        : mode === "bundle"
-                          ? "确认导入管理数据"
-                          : "确认恢复并重新登录"}
+                      : mode === "bundle-export"
+                        ? "生成加密移交包"
+                        : !preview
+                          ? "验证并预览"
+                          : mode === "bundle"
+                            ? "确认导入管理数据"
+                            : "确认恢复并重新登录"}
                 </Button>
               </div>
             </form>
@@ -486,6 +492,106 @@ export function LocalOperationHistory({ epoch }: { epoch: number }) {
           ))}
         </tbody>
       </table>
+    </section>
+  )
+}
+
+export function LocalRecoverySettings() {
+  const [configured, setConfigured] = useState<boolean | null>(null)
+  const [ownerPassword, setOwnerPassword] = useState("")
+  const [credential, setCredential] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  async function refresh() {
+    setError("")
+    const result = await localRequest<{ configured: boolean }>("/admin/local-recovery/status")
+    setConfigured(result.configured)
+  }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read the current owner recovery configuration once.
+  useEffect(() => {
+    void refresh().catch((cause) => setError(message(cause)))
+  }, [])
+
+  async function rotate(event: FormEvent) {
+    event.preventDefault()
+    if (busy) return
+    if (configured && !window.confirm("重新生成会立即作废之前的恢复凭据。是否继续？")) return
+    setBusy(true)
+    setError("")
+    try {
+      const result = await localRequest<{ recoveryCredential: string }>("/admin/local-recovery/rotate", {
+        ownerPassword,
+      })
+      setCredential(result.recoveryCredential)
+      setOwnerPassword("")
+      setConfigured(true)
+    } catch (cause) {
+      setError(message(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="max-w-lg rounded-xl border bg-card p-6">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">账号恢复</h2>
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => void refresh().catch((cause) => setError(message(cause)))}
+        >
+          刷新
+        </Button>
+      </div>
+      {credential ? (
+        <div className="grid gap-4">
+          <div role="status">恢复凭据仅显示一次。请将其保存在安全位置。</div>
+          <code className="select-all break-all rounded border bg-muted p-3">{credential}</code>
+          <div className="flex gap-3">
+            <Button
+              disabled={busy}
+              onClick={() => void navigator.clipboard.writeText(credential).catch((cause) => setError(message(cause)))}
+            >
+              复制恢复凭据
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => setCredential("")}>
+              已妥善保存
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <form className="grid gap-4" onSubmit={rotate}>
+          <div role="status">{configured === null ? "正在读取…" : configured ? "已设置" : "尚未设置"}</div>
+          <div className="grid gap-2">
+            <Label htmlFor="recovery-owner-password">管理密码</Label>
+            <Input
+              id="recovery-owner-password"
+              type="password"
+              autoComplete="current-password"
+              value={ownerPassword}
+              onChange={(event) => setOwnerPassword(event.target.value)}
+              disabled={busy || configured === null}
+              required
+            />
+          </div>
+          {error && (
+            <div role="alert" className="text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          <Button className="justify-self-start" disabled={busy || configured === null}>
+            {busy ? "正在生成…" : configured ? "更换恢复凭据" : "生成恢复凭据"}
+          </Button>
+        </form>
+      )}
+      {credential && error && (
+        <div role="alert" className="mt-4 text-sm text-destructive">
+          {error}
+        </div>
+      )}
     </section>
   )
 }

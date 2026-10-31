@@ -49,7 +49,7 @@ type BundleSummary struct {
 
 var bundleTables = []string{"products", "plans", "entitlements", "offline_actors", "commercial_customers", "offline_requests", "licenses", "offline_device_bindings", "license_issuances", "license_deliveries", "offline_management_operations", "audit_logs"}
 
-const bundleLicenseColumns = "id,product_id,plan_id,email,customer_id,fulfillment_mode,issuance_enabled,current_revision,current_issuance_id,display_number,status,valid_from,valid_until,notes,org_name,created_at,updated_at"
+const bundleLicenseColumns = "id,product_id,plan_id,email,customer_id,fulfillment_mode,issuance_enabled,current_revision,current_issuance_id,display_number,status,device_limit,term_kind,term_amount,term_end_date,term_starts_at,valid_from,valid_until,notes,org_name,created_at,updated_at"
 
 func bundleError(message string) error {
 	return &offline.Error{Code: "BUNDLE_INVALID", Message: message}
@@ -194,7 +194,8 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 		}
 		for _, row := range b.Tables[table] {
 			id := rowText(row, key)
-			if !offline.ValidUUID4(id) || indexes[table][id] != nil {
+			serviceActor := table == "offline_actors" && (id == SigningServiceActorID || id == ClientActivationServiceActorID)
+			if (!offline.ValidUUID4(id) && !serviceActor) || indexes[table][id] != nil {
 				return bundleError("记录编号无效或重复：" + table)
 			}
 			indexes[table][id] = row
@@ -210,7 +211,15 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 			return bundleError("申请原件与登记不一致")
 		}
 	}
+	type issuanceRecord struct {
+		row     BundleRow
+		payload offline.Payload
+	}
 	highest := map[string]int64{}
+	revisions := map[string]map[int64]struct{}{}
+	seenBindingRevision := map[string]map[int64]map[string]bool{}
+	issuancesByID := map[string]issuanceRecord{}
+	issuancesByBinding := map[string][]issuanceRecord{}
 	for _, r := range b.Tables["license_issuances"] {
 		raw, err := rowBytes(r, "raw_bytes")
 		if err != nil {
@@ -230,62 +239,179 @@ func ValidateBusinessBundle(b *BusinessBundle) error {
 		if l == nil || binding == nil || req == nil || p.IssuanceID != rowText(r, "id") || p.LicenseID != rowText(r, "license_id") || p.CustomerID != rowText(l, "customer_id") || p.Revision != rowInt(r, "revision") || p.KeyID != rowText(r, "key_id") || p.Binding.Digest != rowText(binding, "device_digest") || p.Binding.Type != rowText(binding, "device_type") || p.Binding.Digest != rowText(req, "device_digest") || rowText(binding, "license_id") != p.LicenseID || !sameBundleTime(r["issued_at"], p.IssuedAt) || !sameBundleTime(r["not_before"], p.NotBefore) || !sameNullableBundleTime(r["expires_at"], p.ExpiresAt) {
 			return bundleError("授权原件与客户、设备或版本登记不一致")
 		}
-		prev := rowText(r, "previous_issuance_id")
-		if p.Revision == 1 {
-			if prev != "" || rowText(r, "kind") != "initial" {
-				return bundleError("首版授权关系无效")
-			}
-		} else {
-			pr := indexes["license_issuances"][prev]
-			if pr == nil || rowText(pr, "license_id") != p.LicenseID || rowInt(pr, "revision") != p.Revision-1 {
-				return bundleError("签发版本链不完整")
-			}
-			kind := rowText(r, "kind")
-			sameBinding := rowText(pr, "binding_id") == rowText(r, "binding_id")
-			if (kind == "renew" && !sameBinding) || (kind == "transfer" && sameBinding) || (kind != "renew" && kind != "transfer") {
-				return bundleError("续期或换机设备关系无效")
-			}
+		if p.Revision < 1 || p.Revision > 9007199254740991 || !bundleIssuanceStateValid(rowText(r, "kind"), p.BindingState) {
+			return bundleError("签发动作或设备状态无效")
 		}
+		bindingID := rowText(r, "binding_id")
+		if revisions[p.LicenseID] == nil {
+			revisions[p.LicenseID] = map[int64]struct{}{}
+			seenBindingRevision[p.LicenseID] = map[int64]map[string]bool{}
+		}
+		if seenBindingRevision[p.LicenseID][p.Revision] == nil {
+			seenBindingRevision[p.LicenseID][p.Revision] = map[string]bool{}
+		}
+		if seenBindingRevision[p.LicenseID][p.Revision][bindingID] {
+			return bundleError("同一设备存在重复修订原件")
+		}
+		seenBindingRevision[p.LicenseID][p.Revision][bindingID] = true
+		revisions[p.LicenseID][p.Revision] = struct{}{}
+		record := issuanceRecord{row: r, payload: p}
+		issuancesByID[p.IssuanceID] = record
+		issuancesByBinding[bindingID] = append(issuancesByBinding[bindingID], record)
 		if p.Revision > highest[p.LicenseID] {
 			highest[p.LicenseID] = p.Revision
 		}
 	}
+	latestByBinding := map[string]issuanceRecord{}
+	legacyTransferParents := map[string]string{}
+	legacyTransferChildren := map[string]int{}
+	for bindingID, history := range issuancesByBinding {
+		sort.Slice(history, func(i, j int) bool {
+			return rowInt(history[i].row, "revision") < rowInt(history[j].row, "revision")
+		})
+		binding := indexes["offline_device_bindings"][bindingID]
+		if binding == nil {
+			return bundleError("签发原件缺少设备绑定")
+		}
+		for i, record := range history {
+			prevID := rowText(record.row, "previous_issuance_id")
+			kind, state := rowText(record.row, "kind"), record.payload.BindingState
+			if i > 0 && kind == "initial" {
+				return bundleError("首份授权原件不能重复出现")
+			}
+			if i == 0 {
+				if prevID == "" {
+					if (rowInt(record.row, "revision") == 1 && kind != "initial") || (rowInt(record.row, "revision") > 1 && kind != "activate") {
+						return bundleError("设备首份授权原件关系无效")
+					}
+					continue
+				}
+				previous, exists := issuancesByID[prevID]
+				previousBindingID := rowText(binding, "previous_binding_id")
+				if !exists || kind != "transfer" || state != "active" || previous.payload.BindingState != "active" || rowText(previous.row, "license_id") != rowText(record.row, "license_id") || rowInt(record.row, "revision") != rowInt(previous.row, "revision")+1 || previousBindingID == "" || previousBindingID == bindingID || previousBindingID != rowText(previous.row, "binding_id") {
+					return bundleError("跨设备换机原件关系无效")
+				}
+				legacyTransferParents[bindingID] = previousBindingID
+				legacyTransferChildren[previousBindingID]++
+				continue
+			}
+			previous := history[i-1]
+			if prevID != rowText(previous.row, "id") || rowInt(record.row, "revision") != rowInt(previous.row, "revision")+1 || previous.payload.BindingState != "active" {
+				return bundleError("设备签发历史不连续")
+			}
+		}
+		latestByBinding[bindingID] = history[len(history)-1]
+	}
+	for _, delivery := range b.Tables["license_deliveries"] {
+		licenseID := rowText(delivery, "license_id")
+		license := indexes["licenses"][licenseID]
+		if _, exists := delivery["license_id"]; !exists || license == nil || rowText(license, "fulfillment_mode") != "offline_file" {
+			return bundleError("交付记录缺少所属授权")
+		}
+		issuanceRaw, exists := delivery["issuance_id"]
+		if !exists {
+			return bundleError("交付记录缺少签发关联字段")
+		}
+		if string(issuanceRaw) == "null" {
+			continue
+		}
+		issuanceID := rowText(delivery, "issuance_id")
+		issuance, exists := issuancesByID[issuanceID]
+		if issuanceID == "" || !exists || issuance.payload.LicenseID != licenseID {
+			return bundleError("交付记录与授权签发关联不一致")
+		}
+	}
+	for childID, parentID := range legacyTransferParents {
+		childHistory := issuancesByBinding[childID]
+		parentLatest, exists := latestByBinding[parentID]
+		if !exists || len(childHistory) == 0 || rowText(childHistory[0].row, "previous_issuance_id") != rowText(parentLatest.row, "id") {
+			return bundleError("跨设备换机原件未指向前一设备的最新版本")
+		}
+	}
+	for _, binding := range b.Tables["offline_device_bindings"] {
+		id := rowText(binding, "id")
+		previousID := rowText(binding, "previous_binding_id")
+		if previousID != "" {
+			previous := indexes["offline_device_bindings"][previousID]
+			if previous == nil || previousID == id || rowText(previous, "license_id") != rowText(binding, "license_id") || string(previous["superseded_at"]) == "null" || legacyTransferParents[id] != previousID || legacyTransferChildren[previousID] != 1 {
+				return bundleError("设备历史关系无效")
+			}
+		}
+		if _, exists := latestByBinding[id]; !exists {
+			return bundleError("设备绑定缺少签发原件")
+		}
+		latest := latestByBinding[id]
+		superseded := string(binding["superseded_at"]) != "null"
+		if (!superseded && latest.payload.BindingState != "active") || (superseded && latest.payload.BindingState == "active" && legacyTransferChildren[id] != 1) || (superseded && latest.payload.BindingState == "transferred" && rowText(latest.row, "kind") != "transfer") {
+			return bundleError("设备状态与最后签发原件不一致")
+		}
+	}
 	for _, l := range b.Tables["licenses"] {
 		id := rowText(l, "id")
-		r := indexes["license_issuances"][rowText(l, "current_issuance_id")]
-		if rowText(l, "fulfillment_mode") != "offline_file" || r == nil || highest[id] != rowInt(l, "current_revision") || rowInt(r, "revision") != highest[id] || rowText(r, "license_id") != id || indexes["commercial_customers"][rowText(l, "customer_id")] == nil || !equalBundleTime(l["valid_from"], r["not_before"]) || !equalBundleTime(l["valid_until"], r["expires_at"]) {
-			return bundleError("当前授权指针或最高版本不一致")
-		}
 		plan := indexes["plans"][rowText(l, "plan_id")]
 		product := indexes["products"][rowText(l, "product_id")]
-		if plan == nil || product == nil || rowText(plan, "product_id") != rowText(l, "product_id") || rowText(product, "license_product_code") != offline.ProductID {
+		if rowText(l, "fulfillment_mode") != "offline_file" || indexes["commercial_customers"][rowText(l, "customer_id")] == nil || plan == nil || product == nil || rowText(plan, "product_id") != rowText(l, "product_id") || rowText(product, "license_product_code") != offline.ProductID {
 			return bundleError("授权产品与计划关系无效")
 		}
-		active := 0
+		for _, column := range []string{"device_limit", "term_kind", "term_amount", "term_end_date", "term_starts_at"} {
+			if _, ok := l[column]; !ok {
+				return bundleError("授权缺少期限或设备数量事实")
+			}
+		}
+		deviceLimit := rowInt(l, "device_limit")
+		if deviceLimit < 1 {
+			return bundleError("授权设备数量无效")
+		}
+		currentRevision := rowInt(l, "current_revision")
+		issuanceID := rowText(l, "current_issuance_id")
+		current := indexes["license_issuances"][issuanceID]
+		active, bindings := 0, 0
 		for _, binding := range b.Tables["offline_device_bindings"] {
-			if rowText(binding, "license_id") == id && string(binding["superseded_at"]) == "null" {
-				active++
-				if rowText(binding, "id") != rowText(r, "binding_id") {
-					return bundleError("当前设备与最新签发原件不一致")
+			if rowText(binding, "license_id") == id {
+				bindings++
+				bindingID := rowText(binding, "id")
+				latest := latestByBinding[bindingID]
+				if string(binding["superseded_at"]) == "null" {
+					active++
+					if latest.payload.BindingState != "active" || rowInt(latest.row, "revision") != currentRevision {
+						return bundleError("当前设备缺少最新签发原件")
+					}
 				}
 			}
 		}
-		if active != 1 {
-			return bundleError("授权没有唯一当前设备")
+		if currentRevision == 0 {
+			// valid_from is a required legacy column; revision zero means it is only a creation placeholder.
+			if issuanceID != "" || highest[id] != 0 || string(l["valid_until"]) != "null" || bindings != 0 {
+				return bundleError("未激活授权不得包含签发版本或设备绑定")
+			}
+			continue
+		}
+		record, exists := issuancesByID[issuanceID]
+		if current == nil || !exists || highest[id] != currentRevision || int64(len(revisions[id])) != currentRevision || rowInt(current, "revision") != highest[id] || rowText(current, "license_id") != id || rowText(latestByBinding[rowText(current, "binding_id")].row, "id") != issuanceID || !equalBundleTime(l["valid_from"], current["not_before"]) || !equalBundleTime(l["valid_until"], current["expires_at"]) {
+			return bundleError("当前授权指针或最高版本不一致")
+		}
+		currentBinding := indexes["offline_device_bindings"][rowText(current, "binding_id")]
+		if (active > 0 && (int64(active) > deviceLimit || string(currentBinding["superseded_at"]) != "null" || record.payload.BindingState != "active")) || (active == 0 && (string(currentBinding["superseded_at"]) == "null" || record.payload.BindingState != "transferred")) {
+			return bundleError("当前授权指针未对应当前设备状态")
 		}
 	}
 	for _, binding := range b.Tables["offline_device_bindings"] {
 		if indexes["licenses"][rowText(binding, "license_id")] == nil {
 			return bundleError("设备缺少所属授权")
 		}
-		if id := rowText(binding, "previous_binding_id"); id != "" {
-			previous := indexes["offline_device_bindings"][id]
-			if previous == nil || rowText(previous, "license_id") != rowText(binding, "license_id") || string(previous["superseded_at"]) == "null" {
-				return bundleError("设备历史关系无效")
-			}
-		}
 	}
 	return nil
+}
+
+func bundleIssuanceStateValid(kind, state string) bool {
+	switch kind {
+	case "initial", "activate", "renew":
+		return state == "active"
+	case "transfer":
+		return state == "active" || state == "transferred"
+	default:
+		return false
+	}
 }
 func sameBundleTime(raw json.RawMessage, expected string) bool {
 	var s string
@@ -360,10 +486,39 @@ func sameDefinition(a, b BundleRow, exclude ...string) bool {
 	}
 	return reflect.DeepEqual(aa, bb)
 }
-func (s *Store) ImportBusinessBundle(ctx context.Context, b *BusinessBundle, actor string, commit bool) (BundleSummary, error) {
+func bundleLicenseCodesValid(b *BusinessBundle, codes map[string]string) bool {
+	ids := make(map[string]bool, len(b.Tables["licenses"]))
+	for _, row := range b.Tables["licenses"] {
+		id := rowText(row, "id")
+		if id == "" || ids[id] {
+			return false
+		}
+		ids[id] = true
+	}
+	if len(codes) != len(ids) {
+		return false
+	}
+	hashes := make(map[string]bool, len(ids))
+	for id, code := range codes {
+		if !ids[id] || strings.TrimSpace(code) == "" {
+			return false
+		}
+		hash := license.HashKey(code)
+		if hashes[hash] {
+			return false
+		}
+		hashes[hash] = true
+	}
+	return true
+}
+
+func (s *Store) ImportBusinessBundle(ctx context.Context, b *BusinessBundle, licenseCodes map[string]string, actor string, commit bool) (BundleSummary, error) {
 	summary := BundleSummary{Customers: len(b.Tables["commercial_customers"]), Licenses: len(b.Tables["licenses"]), Originals: len(b.Tables["license_issuances"]), KeyID: b.PublicIdentity.KeyID, Mappings: []BundleMapping{}}
 	if err := ValidateBusinessBundle(b); err != nil {
 		return summary, err
+	}
+	if !bundleLicenseCodesValid(b, licenseCodes) {
+		return summary, bundleError("授权码与授权记录不一致")
 	}
 	if s.LicenseKeyAEAD == nil {
 		return summary, bundleError("本机加密配置不可用")
@@ -486,7 +641,8 @@ func (s *Store) ImportBusinessBundle(ctx context.Context, b *BusinessBundle, act
 					}
 					rowSet(row, "product_id", p)
 					rowSet(row, "plan_id", q)
-					l := &model.License{ID: rowText(row, "id"), LicenseKey: license.GenerateKey("KG")}
+					licenseID := rowText(row, "id")
+					l := &model.License{ID: licenseID, LicenseKey: licenseCodes[licenseID]}
 					if err := s.prepareLicenseForInsert(l); err != nil {
 						return err
 					}

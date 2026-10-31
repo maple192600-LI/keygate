@@ -15,7 +15,8 @@ import (
 type OfflineDelivery struct {
 	bun.BaseModel `bun:"table:license_deliveries,alias:delivery"`
 	ID            string    `bun:",pk" json:"id"`
-	IssuanceID    string    `json:"issuanceId"`
+	LicenseID     string    `json:"licenseId"`
+	IssuanceID    *string   `json:"issuanceId"`
 	OperationID   string    `json:"operationId"`
 	OperationHash string    `json:"-"`
 	Method        string    `json:"method"`
@@ -27,7 +28,12 @@ type OfflineDelivery struct {
 }
 
 func (s *Store) RecordOfflineDelivery(ctx context.Context, row *OfflineDelivery) (*OfflineDelivery, bool, error) {
-	input := struct{ IssuanceID, Method, Recipient, Notes, DeliveredAt string }{row.IssuanceID, row.Method, row.Recipient, row.Notes, row.DeliveredAt.UTC().Format("2006-01-02T15:04:05.000Z")}
+	var input any
+	if row.IssuanceID != nil {
+		input = struct{ IssuanceID, Method, Recipient, Notes, DeliveredAt string }{*row.IssuanceID, row.Method, row.Recipient, row.Notes, row.DeliveredAt.UTC().Format("2006-01-02T15:04:05.000Z")}
+	} else {
+		input = struct{ LicenseID, Method, Recipient, Notes, DeliveredAt string }{row.LicenseID, row.Method, row.Recipient, row.Notes, row.DeliveredAt.UTC().Format("2006-01-02T15:04:05.000Z")}
+	}
 	raw, _ := json.Marshal(input)
 	sum := sha256.Sum256(raw)
 	row.OperationHash = hex.EncodeToString(sum[:])
@@ -53,15 +59,26 @@ func (s *Store) RecordOfflineDelivery(ctx context.Context, row *OfflineDelivery)
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		var licenseID string
-		if err := tx.NewRaw("SELECT l.id FROM license_issuances i JOIN licenses l ON l.id=i.license_id WHERE i.id=? AND l.fulfillment_mode='offline_file'", row.IssuanceID).Scan(ctx, &licenseID); err != nil {
-			return err
+		if row.IssuanceID != nil {
+			var licenseID string
+			if err := tx.NewRaw("SELECT l.id FROM license_issuances i JOIN licenses l ON l.id=i.license_id WHERE i.id=? AND l.fulfillment_mode='offline_file'", *row.IssuanceID).Scan(ctx, &licenseID); err != nil {
+				return err
+			}
+			if row.LicenseID != "" && row.LicenseID != licenseID {
+				return errors.New("delivery issuance does not belong to license")
+			}
+			row.LicenseID = licenseID
+		} else {
+			var licenseID string
+			if err := tx.NewRaw("SELECT id FROM licenses WHERE id=? AND fulfillment_mode='offline_file'", row.LicenseID).Scan(ctx, &licenseID); err != nil {
+				return err
+			}
 		}
 		row.ID = NewID()
 		if _, err := tx.NewInsert().Model(row).Returning("*").Exec(ctx); err != nil {
 			return err
 		}
-		if err := LocalAuditIn(ctx, tx, row.CreatedBy, "license-delivery", row.ID, "record", map[string]any{"issuanceId": row.IssuanceID, "licenseId": licenseID}); err != nil {
+		if err := LocalAuditIn(ctx, tx, row.CreatedBy, "license-delivery", row.ID, "record", map[string]any{"issuanceId": row.IssuanceID, "licenseId": row.LicenseID}); err != nil {
 			return err
 		}
 		result = row
@@ -72,5 +89,18 @@ func (s *Store) RecordOfflineDelivery(ctx context.Context, row *OfflineDelivery)
 func (s *Store) OfflineDeliveries(ctx context.Context, issuanceID string) ([]OfflineDelivery, error) {
 	rows := []OfflineDelivery{}
 	err := s.DB.NewSelect().Model(&rows).Where("issuance_id=?", issuanceID).OrderExpr("created_at DESC,id").Scan(ctx)
+	return rows, err
+}
+
+func (s *Store) OfflineLicenseDeliveries(ctx context.Context, licenseID string) ([]OfflineDelivery, error) {
+	var exists bool
+	if err := s.DB.NewRaw("SELECT EXISTS(SELECT 1 FROM licenses WHERE id=? AND fulfillment_mode='offline_file')", licenseID).Scan(ctx, &exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, sql.ErrNoRows
+	}
+	rows := []OfflineDelivery{}
+	err := s.DB.NewSelect().Model(&rows).Where("license_id=?", licenseID).OrderExpr("created_at DESC,id").Scan(ctx)
 	return rows, err
 }

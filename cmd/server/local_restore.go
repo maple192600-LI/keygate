@@ -27,6 +27,7 @@ import (
 // by its stopped gate; old databases and files stay intact.
 type localRouterSwitch struct {
 	current  atomic.Pointer[gin.Engine]
+	client   atomic.Pointer[gin.Engine]
 	mu       sync.Mutex
 	cfg      *config.Config
 	shutdown func()
@@ -36,13 +37,19 @@ type localRouterSwitch struct {
 
 func newLocalRouterSwitch(cfg *config.Config, db *store.Store, shutdown func()) *localRouterSwitch {
 	r := &localRouterSwitch{cfg: cfg, shutdown: shutdown}
-	router, closeRouter := newManagedLocalRouter(cfg, db, r.activate, shutdown)
+	router, clientRouter, closeRouter := newManagedLocalRouter(cfg, db, r.activate, shutdown)
 	r.current.Store(router)
+	r.client.Store(clientRouter)
 	r.cleanups = append(r.cleanups, closeRouter)
 	return r
 }
 func (r *localRouterSwitch) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.current.Load().ServeHTTP(w, req)
+}
+func (r *localRouterSwitch) ClientHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.client.Load().ServeHTTP(w, req)
+	})
 }
 func (r *localRouterSwitch) activate(candidate *service.RestoreCandidate) error {
 	r.mu.Lock()
@@ -59,12 +66,13 @@ func (r *localRouterSwitch) activate(candidate *service.RestoreCandidate) error 
 		return err
 	}
 	next.JWTSecret = hex.EncodeToString(secret)
-	router, closeRouter := newManagedLocalRouter(&next, candidate.Store, r.activate, r.shutdown)
+	router, clientRouter, closeRouter := newManagedLocalRouter(&next, candidate.Store, r.activate, r.shutdown)
 	if err := persistRestoreSelection(r.cfg, &next, candidate.DatabaseName); err != nil {
 		_ = closeRouter(context.Background())
 		return err
 	}
 	r.current.Store(router)
+	r.client.Store(clientRouter)
 	r.cfg = &next
 	r.cleanups = append(r.cleanups, closeRouter)
 	r.owned = append(r.owned, candidate.Store)

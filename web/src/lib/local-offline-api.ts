@@ -6,7 +6,7 @@ export class LocalAPIError extends Error {
 let refreshing: Promise<boolean> | null = null
 async function localResponse(path: string, body?: unknown, method = body === undefined ? "GET" : "POST", retry = true, form?:FormData): Promise<Response> {
   let response: Response
-  try { response = await fetch(`/api/v1${path}`, { method, credentials: "same-origin", headers: form?undefined:{ "Content-Type": "application/json" }, body: form||(body === undefined ? undefined : JSON.stringify(body)) }) }
+  try { response = await fetch(`/api/v1${path}`, { method, credentials: "same-origin", cache: "no-store", headers: form?undefined:{ "Content-Type": "application/json" }, body: form||(body === undefined ? undefined : JSON.stringify(body)) }) }
   catch { throw new LocalAPIError("SERVICE_UNAVAILABLE", "本地管理服务暂时不可用，请重新连接后按原操作重试", 503) }
   if (response.status === 401 && retry && !["/auth/password/login", "/auth/refresh", "/local/setup"].includes(path)) {
     const denied = await response.clone().json().catch(() => null)

@@ -29,9 +29,12 @@ func decodeLocal[T any](t *testing.T, body []byte) T {
 	return envelope.Data
 }
 func TestLocalOfflineIssuanceHTTP(t *testing.T) {
+	type identityStatus struct {
+		Identity         offline.PublicIdentity `json:"identity"`
+		AutomaticSigning bool                   `json:"automaticSigning"`
+	}
 	a := localApp(t)
 	password := "Synthetic-issuing-owner-password"
-	passphrase := "Synthetic-issuing-key-passphrase"
 	if status, body := a.call(t, "POST", "/api/v1/local/setup", map[string]string{"username": "issuing_owner", "password": password, "siteName": "签发隔离厂商", "contact": "合成联系方式"}); status != 201 {
 		t.Fatalf("setup %d %s", status, body)
 	}
@@ -68,14 +71,14 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	if preview.ExpiresAt == nil || *preview.ExpiresAt != expected || preview.NotBefore != preview.BaseTime {
 		t.Fatal("preview differs from independent 7x24-hour expectation")
 	}
-	status, body = a.call(t, "POST", "/api/v1/admin/offline-key/create", map[string]string{"ownerPassword": password, "passphrase": passphrase})
-	if status != 201 {
-		t.Fatalf("key create %d %s", status, body)
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic signing identity %d %s", status, body)
 	}
-	identity := decodeLocal[offline.PublicIdentity](t, body)
-	pub, err := offline.ParsePublic([]byte(identity.PublicKeyPEM))
-	if err != nil {
-		t.Fatal(err)
+	public := decodeLocal[identityStatus](t, body)
+	identity := public.Identity
+	if !public.AutomaticSigning || identity.KeyID != "" || identity.PublicKeyPEM != "" {
+		t.Fatalf("fresh service created a signing identity before issuance: %+v", public)
 	}
 	command := service.OfflineIssueCommand{OfflineIntent: intent, OperationID: store.NewID(), PreviewBase: preview.PreviewBase}
 	var wg sync.WaitGroup
@@ -109,6 +112,19 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 	if count != 2 || replays != 1 {
 		t.Fatalf("count=%d replay=%d", count, replays)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("automatic signing identity after issuance %d %s", status, body)
+	}
+	public = decodeLocal[identityStatus](t, body)
+	identity = public.Identity
+	if !public.AutomaticSigning || identity.KeyID == "" || identity.PublicKeyPEM == "" {
+		t.Fatalf("automatic signing identity was not established at issuance: %+v", public)
+	}
+	pub, err := offline.ParsePublic([]byte(identity.PublicKeyPEM))
+	if err != nil {
+		t.Fatal(err)
 	}
 	// Online lifecycle helpers must refuse even an otherwise qualifying
 	// offline row; the original signed deadline and status stay unchanged.
@@ -167,6 +183,13 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	if actualStatus != "active" || actualUntil.UTC().Format("2006-01-02T15:04:05.000Z") != expected {
 		t.Fatal("online lifecycle changed signed license metadata")
 	}
+	status, body, headers := a.callHeaders(t, "GET", "/api/v1/admin/offline-licenses/"+result.LicenseID+"/code", nil)
+	code := decodeLocal[struct {
+		LicenseCode string `json:"licenseCode"`
+	}](t, body)
+	if status != 200 || code.LicenseCode == "" || !strings.Contains(strings.ToLower(headers.Get("Cache-Control")), "no-store") {
+		t.Fatalf("license code must be owner-readable and not cacheable: %d %s %v", status, body, headers)
+	}
 	status, file := a.call(t, "GET", "/api/v1/admin/license-issuances/"+url.PathEscape(result.IssuanceID)+"/file", nil)
 	if status != 200 {
 		t.Fatalf("download %d %s", status, file)
@@ -215,11 +238,30 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}](t, body).Items) != 1 {
 		t.Fatal("delivery row count")
 	}
-	if status, _ := a.call(t, "POST", "/api/v1/admin/offline-key/lock", nil); status != 200 {
-		t.Fatal("lock")
+	if status, body := a.call(t, "POST", "/api/v1/auth/logout", nil); status != 200 {
+		t.Fatalf("logout %d %s", status, body)
 	}
-	if status, body := a.call(t, "POST", "/api/v1/admin/offline-licenses", command); status != 200 || !decodeLocal[service.OfflineIssueResult](t, body).Replayed {
-		t.Fatalf("locked idempotent receipt %d %s", status, body)
+	if status, body := a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "issuing_owner", "password": password}); status != 200 {
+		t.Fatalf("login after logout %d %s", status, body)
+	}
+	status, signingBody := a.call(t, "GET", "/api/v1/admin/offline-key/public", nil)
+	if status != 200 {
+		t.Fatalf("signing status after logout %d %s", status, signingBody)
+	}
+	statusAfterLogout := decodeLocal[identityStatus](t, signingBody)
+	if !statusAfterLogout.AutomaticSigning || statusAfterLogout.Identity.KeyID != identity.KeyID {
+		t.Fatalf("owner logout stopped service signing: %+v response=%s", statusAfterLogout, signingBody)
+	}
+	renewIntent := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renewIntent)
+	if status != 200 {
+		t.Fatalf("renew preview after logout %d %s", status, body)
+	}
+	renewPreview := decodeLocal[service.OfflinePreview](t, body)
+	renewCommand := service.OfflineIssueCommand{OfflineIntent: renewIntent, OperationID: store.NewID(), PreviewBase: renewPreview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/"+result.LicenseID+"/renew", renewCommand)
+	if status != 200 || decodeLocal[service.OfflineIssueResult](t, body).Revision != 2 {
+		t.Fatalf("renew after logout %d %s", status, body)
 	}
 	conflicting := command
 	conflicting.Term.Amount = 8
@@ -231,7 +273,7 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 
 	statePath := "/api/v1/admin/offline-licenses/" + result.LicenseID + "/issuance-state"
-	stateCommand := map[string]any{"operationId": store.NewID(), "enabled": false, "expectedEnabled": true, "expectedRevision": 1, "reason": "合成停发检查"}
+	stateCommand := map[string]any{"operationId": store.NewID(), "enabled": false, "expectedEnabled": true, "expectedRevision": 2, "reason": "合成停发检查"}
 	if status, body := a.call(t, "POST", statePath, stateCommand); status != 200 {
 		t.Fatalf("stop %d %s", status, body)
 	}
@@ -240,14 +282,14 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}](t, body).Replayed {
 		t.Fatal("state operation not idempotent", status, string(body))
 	}
-	renew := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	renew := service.OfflineIntent{Action: "renew", LicenseID: result.LicenseID, ExpectedRevision: 2, Term: offline.Term{Kind: "days", Amount: 7}}
 	if status, body := a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renew); status != 409 || !bytes.Contains(body, []byte("ISSUANCE_STOPPED")) {
 		t.Fatal("stopped issuance still allowed", status, string(body))
 	}
 	if status, body := a.call(t, "GET", "/api/v1/admin/license-issuances/"+result.IssuanceID+"/file", nil); status != 200 || !bytes.Equal(body, file) {
 		t.Fatal("stopping changed previously issued bytes")
 	}
-	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=recorded&termState=valid", nil)
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=pending&termState=valid", nil)
 	listing := decodeLocal[struct {
 		Items []store.OfflineLicenseView `json:"items"`
 		Total int                        `json:"total"`
@@ -261,11 +303,242 @@ func TestLocalOfflineIssuanceHTTP(t *testing.T) {
 	}
 	status, body = a.call(t, "GET", "/api/v1/admin/overview", nil)
 	overview := decodeLocal[store.OfflineOverview](t, body)
-	if status != 200 || overview.Customers != 1 || overview.Licenses != 1 || overview.Valid != 1 || overview.Stopped != 1 || overview.PendingDelivery != 0 || overview.UsageState != "unreported" {
+	if status != 200 || overview.Customers != 1 || overview.Licenses != 1 || overview.Valid != 1 || overview.Stopped != 1 || overview.PendingDelivery != 1 || overview.UsageState != "unreported" {
 		t.Fatalf("overview %d %s", status, body)
 	}
-	stateCommand = map[string]any{"operationId": store.NewID(), "enabled": true, "expectedEnabled": false, "expectedRevision": 1, "reason": "合成恢复续发检查"}
+	stateCommand = map[string]any{"operationId": store.NewID(), "enabled": true, "expectedEnabled": false, "expectedRevision": 2, "reason": "合成恢复续发检查"}
 	if status, body := a.call(t, "POST", statePath, stateCommand); status != 200 {
 		t.Fatalf("resume %d %s", status, body)
+	}
+}
+
+func TestLocalUnactivatedLicenseCodeDeliveryHTTP(t *testing.T) {
+	a := localApp(t)
+	password := "Synthetic-code-delivery-owner-password"
+	if status, body := a.call(t, "POST", "/api/v1/local/setup", map[string]string{"username": "delivery_owner", "password": password, "siteName": "合成交付厂商", "contact": "合成联系方式"}); status != 201 {
+		t.Fatalf("setup %d %s", status, body)
+	}
+	if status, body := a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "delivery_owner", "password": password}); status != 200 {
+		t.Fatalf("login %d %s", status, body)
+	}
+	status, body := a.call(t, "POST", "/api/v1/admin/commercial-customers", map[string]any{"displayName": "合成授权码客户", "customerType": "company", "contactMethod": "合成联系号"})
+	if status != 201 {
+		t.Fatalf("customer %d %s", status, body)
+	}
+	customer := decodeLocal[struct {
+		ID string `json:"id"`
+	}](t, body)
+	intent := service.OfflineIntent{Action: "initial", CustomerID: customer.ID, DeviceLimit: 1, Term: offline.Term{Kind: "perpetual"}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", intent)
+	if status != 200 {
+		t.Fatalf("preview %d %s", status, body)
+	}
+	preview := decodeLocal[service.OfflinePreview](t, body)
+	command := service.OfflineIssueCommand{OfflineIntent: intent, OperationID: store.NewID(), PreviewBase: preview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses", command)
+	if status != 200 {
+		t.Fatalf("create code %d %s", status, body)
+	}
+	created := decodeLocal[service.OfflineIssueResult](t, body)
+	if created.LicenseID == "" || created.LicenseCode == "" || created.Revision != 0 {
+		t.Fatalf("new code is not unactivated: %+v", created)
+	}
+
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=pending&termState=unactivated", nil)
+	pending := decodeLocal[struct {
+		Items []store.OfflineLicenseView `json:"items"`
+		Total int                        `json:"total"`
+	}](t, body)
+	if status != 200 || pending.Total != 1 || len(pending.Items) != 1 || pending.Items[0].TermState != "unactivated" || pending.Items[0].DeliveryState != "pending" {
+		t.Fatalf("unactivated code was not pending delivery: %d %s", status, body)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/overview", nil)
+	before := decodeLocal[store.OfflineOverview](t, body)
+	if status != 200 || before.Licenses != 1 || before.Valid != 0 || before.Expired != 0 || before.Expiring != 0 || before.PendingDelivery != 1 {
+		t.Fatalf("unactivated perpetual code distorted overview: %d %+v %s", status, before, body)
+	}
+
+	const deliveryPath = "/api/v1/admin/offline-licenses/"
+	deliveryPathForCode := deliveryPath + created.LicenseID + "/deliveries"
+	delivery := map[string]string{"operationId": store.NewID(), "method": "wechat", "recipient": "合成授权码收件人", "deliveredAt": "2026-10-29T12:00:00.000Z", "notes": "授权码交付"}
+	var deliveryID string
+	replays := 0
+	for range 2 {
+		status, body = a.call(t, "POST", deliveryPathForCode, delivery)
+		if status != 200 {
+			t.Fatalf("record code delivery %d %s", status, body)
+		}
+		value := decodeLocal[struct {
+			Delivery store.OfflineDelivery `json:"delivery"`
+			Replayed bool                  `json:"replayed"`
+		}](t, body)
+		if value.Delivery.LicenseID != created.LicenseID || value.Delivery.IssuanceID != nil {
+			t.Fatalf("code delivery must retain license identity without inventing an issuance: %+v", value.Delivery)
+		}
+		if deliveryID != "" && deliveryID != value.Delivery.ID {
+			t.Fatal("replayed delivery created a duplicate row")
+		}
+		deliveryID = value.Delivery.ID
+		if value.Replayed {
+			replays++
+		}
+	}
+	if replays != 1 {
+		t.Fatalf("delivery operation replay count = %d", replays)
+	}
+	delivery["recipient"] = "不同收件人"
+	if status, body = a.call(t, "POST", deliveryPathForCode, delivery); status != 409 {
+		t.Fatalf("changed operation content was accepted: %d %s", status, body)
+	}
+
+	status, body = a.call(t, "GET", deliveryPathForCode, nil)
+	rows := decodeLocal[struct {
+		Items []store.OfflineDelivery `json:"items"`
+	}](t, body)
+	if status != 200 || len(rows.Items) != 1 || rows.Items[0].ID != deliveryID || rows.Items[0].IssuanceID != nil {
+		t.Fatalf("license delivery history %d %s", status, body)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=recorded&termState=unactivated", nil)
+	recorded := decodeLocal[struct {
+		Items []store.OfflineLicenseView `json:"items"`
+		Total int                        `json:"total"`
+	}](t, body)
+	if status != 200 || recorded.Total != 1 || len(recorded.Items) != 1 || recorded.Items[0].DeliveryState != "recorded" || recorded.Items[0].DeliveryMethod != "wechat" || recorded.Items[0].DeliveryRecipient != "合成授权码收件人" {
+		t.Fatalf("delivery filter/summary did not reflect code delivery: %d %s", status, body)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses/"+created.LicenseID, nil)
+	detail := decodeLocal[struct {
+		Deliveries []store.OfflineDelivery `json:"deliveries"`
+	}](t, body)
+	if status != 200 || len(detail.Deliveries) != 1 || detail.Deliveries[0].ID != deliveryID {
+		t.Fatalf("license detail lost delivery history: %d %s", status, body)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/overview", nil)
+	after := decodeLocal[store.OfflineOverview](t, body)
+	if status != 200 || after.PendingDelivery != 0 || after.Valid != 0 || after.Expired != 0 || after.Expiring != 0 {
+		t.Fatalf("delivered unactivated code distorted overview: %d %+v %s", status, after, body)
+	}
+	var deliveryRows, auditRows int
+	if err := a.store.DB.NewRaw("SELECT count(*) FROM license_deliveries WHERE license_id=?", created.LicenseID).Scan(context.Background(), &deliveryRows); err != nil || deliveryRows != 1 {
+		t.Fatalf("delivery transaction left %d rows: %v", deliveryRows, err)
+	}
+	if err := a.store.DB.NewRaw("SELECT count(*) FROM audit_logs WHERE entity='license-delivery' AND entity_id=?", deliveryID).Scan(context.Background(), &auditRows); err != nil || auditRows != 1 {
+		t.Fatalf("delivery audit rows = %d: %v", auditRows, err)
+	}
+}
+
+func TestLocalLicenseCodeDeliverySurvivesActivationAndRenewalHTTP(t *testing.T) {
+	a := localApp(t)
+	password := "Synthetic-delivery-renewal-owner-password"
+	if status, body := a.call(t, "POST", "/api/v1/local/setup", map[string]string{"username": "delivery_renewal_owner", "password": password, "siteName": "合成授权交付厂商", "contact": "合成联系方式"}); status != 201 {
+		t.Fatalf("setup %d %s", status, body)
+	}
+	if status, body := a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "delivery_renewal_owner", "password": password}); status != 200 {
+		t.Fatalf("login %d %s", status, body)
+	}
+	status, body := a.call(t, "POST", "/api/v1/admin/commercial-customers", map[string]any{"displayName": "合成有限期授权客户", "customerType": "company", "contactMethod": "合成联系号"})
+	if status != 201 {
+		t.Fatalf("customer %d %s", status, body)
+	}
+	customer := decodeLocal[struct {
+		ID string `json:"id"`
+	}](t, body)
+	initialIntent := service.OfflineIntent{Action: "initial", CustomerID: customer.ID, DeviceLimit: 1, Term: offline.Term{Kind: "days", Amount: 30}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", initialIntent)
+	if status != 200 {
+		t.Fatalf("initial preview %d %s", status, body)
+	}
+	initialPreview := decodeLocal[service.OfflinePreview](t, body)
+	initialCommand := service.OfflineIssueCommand{OfflineIntent: initialIntent, OperationID: store.NewID(), PreviewBase: initialPreview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses", initialCommand)
+	if status != 200 {
+		t.Fatalf("create code %d %s", status, body)
+	}
+	created := decodeLocal[service.OfflineIssueResult](t, body)
+	if created.LicenseID == "" || created.LicenseCode == "" || created.Revision != 0 || created.ExpiresAt != nil {
+		t.Fatalf("finite license code was not left unactivated: %+v", created)
+	}
+
+	delivery := map[string]string{"operationId": store.NewID(), "method": "email", "recipient": "合成授权码收件人", "deliveredAt": "2026-10-29T12:00:00.000Z", "notes": "首次授权码交付"}
+	deliveryPath := "/api/v1/admin/offline-licenses/" + created.LicenseID + "/deliveries"
+	status, body = a.call(t, "POST", deliveryPath, delivery)
+	if status != 200 {
+		t.Fatalf("record unactivated code delivery %d %s", status, body)
+	}
+	recorded := decodeLocal[struct {
+		Delivery store.OfflineDelivery `json:"delivery"`
+		Replayed bool                  `json:"replayed"`
+	}](t, body)
+	if recorded.Delivery.LicenseID != created.LicenseID || recorded.Delivery.IssuanceID != nil || recorded.Replayed {
+		t.Fatalf("code delivery was not tied to the license without an issuance: %+v", recorded)
+	}
+
+	device := offline.Device{Type: offline.MachineType, Digest: strings.Repeat("c", 64)}
+	activation := service.ClientActivationCommand{
+		OperationID: store.NewID(), LicenseCode: created.LicenseCode, ProductID: offline.ProductID, Device: device,
+		DeviceLabel: "合成有限期设备", AppVersion: "0.1.0-test", BuildID: "delivery-renewal-test",
+	}
+	status, body = a.callClient(t, "POST", "/api/v1/client/activate", activation)
+	if status != 200 {
+		t.Fatalf("activate delivered license code %d %s", status, body)
+	}
+	activated := decodeLocal[service.ClientLicenseResult](t, body)
+	if activated.LicenseID != created.LicenseID || activated.RawLicense == "" {
+		t.Fatalf("activation changed the delivered license identity: %+v", activated)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=recorded&termState=valid", nil)
+	activeList := decodeLocal[struct {
+		Items []store.OfflineLicenseView `json:"items"`
+		Total int                        `json:"total"`
+	}](t, body)
+	if status != 200 || activeList.Total != 1 || len(activeList.Items) != 1 || activeList.Items[0].ID != created.LicenseID || activeList.Items[0].Revision != 1 || activeList.Items[0].DeliveryState != "recorded" || activeList.Items[0].DeliveryMethod != "email" || activeList.Items[0].ExpiresAt == nil {
+		t.Fatalf("activation lost the recorded delivery status: %d %s", status, body)
+	}
+	activatedDeadline := *activeList.Items[0].ExpiresAt
+
+	renewIntent := service.OfflineIntent{Action: "renew", LicenseID: created.LicenseID, ExpectedRevision: 1, Term: offline.Term{Kind: "days", Amount: 7}}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/preview", renewIntent)
+	if status != 200 {
+		t.Fatalf("renew preview %d %s", status, body)
+	}
+	renewPreview := decodeLocal[service.OfflinePreview](t, body)
+	renewCommand := service.OfflineIssueCommand{OfflineIntent: renewIntent, OperationID: store.NewID(), PreviewBase: renewPreview.PreviewBase}
+	status, body = a.call(t, "POST", "/api/v1/admin/offline-licenses/"+created.LicenseID+"/renew", renewCommand)
+	if status != 200 {
+		t.Fatalf("renew delivered license %d %s", status, body)
+	}
+	renewed := decodeLocal[service.OfflineIssueResult](t, body)
+	if renewed.LicenseID != created.LicenseID || renewed.Revision != 2 || renewed.ExpiresAt == nil {
+		t.Fatalf("renewal changed license identity or finite term: %+v", renewed)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses?deliveryState=recorded&termState=valid", nil)
+	renewedList := decodeLocal[struct {
+		Items []store.OfflineLicenseView `json:"items"`
+		Total int                        `json:"total"`
+	}](t, body)
+	if status != 200 || renewedList.Total != 1 || len(renewedList.Items) != 1 || renewedList.Items[0].ID != created.LicenseID || renewedList.Items[0].Revision != 2 || renewedList.Items[0].DeliveryState != "recorded" || renewedList.Items[0].DeliveryMethod != "email" || renewedList.Items[0].ExpiresAt == nil {
+		t.Fatalf("renewal lost the recorded delivery status: %d %s", status, body)
+	}
+	if renewedList.Items[0].ExpiresAt.Sub(activatedDeadline) != 7*24*time.Hour {
+		t.Fatalf("renewal changed the expected finite-term extension: activated=%s renewed=%s", activatedDeadline, renewedList.Items[0].ExpiresAt)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses/"+created.LicenseID, nil)
+	detail := decodeLocal[struct {
+		License   store.OfflineLicenseView `json:"license"`
+		Issuances []struct {
+			ID       string `json:"id"`
+			Revision int64  `json:"revision"`
+		} `json:"issuances"`
+		Deliveries []store.OfflineDelivery `json:"deliveries"`
+	}](t, body)
+	if status != 200 || detail.License.Revision != 2 || detail.License.DeliveryState != "recorded" || len(detail.Issuances) != 2 || detail.Issuances[0].Revision != 2 || len(detail.Deliveries) != 1 || detail.Deliveries[0].ID != recorded.Delivery.ID || detail.Deliveries[0].LicenseID != created.LicenseID || detail.Deliveries[0].IssuanceID != nil {
+		t.Fatalf("renewal changed delivery history: %d %+v %s", status, detail, body)
+	}
+	status, body = a.call(t, "GET", "/api/v1/admin/offline-licenses/"+created.LicenseID+"/code", nil)
+	currentCode := decodeLocal[struct {
+		LicenseCode string `json:"licenseCode"`
+	}](t, body)
+	if status != 200 || currentCode.LicenseCode != created.LicenseCode {
+		t.Fatalf("renewal changed the delivered authorization code: %d %s", status, body)
 	}
 }

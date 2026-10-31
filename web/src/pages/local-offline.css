@@ -21,6 +21,7 @@
 }
 
 .snail-local *, .snail-local ::before, .snail-local ::after { border-color: var(--color-border); }
+.snail-local [hidden] { display: none; }
 .snail-local button { box-shadow: none; }
 .snail-local input, .snail-local select { min-width: 0; box-shadow: none; }
 .snail-local input:focus-visible, .snail-local select:focus-visible { outline: 2px solid #a9bffd; outline-offset: 1px; }

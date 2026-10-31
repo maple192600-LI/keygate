@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
@@ -82,7 +84,17 @@ func (h *LocalAuthHandler) Setup(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	user, err := h.Store.InitializeLocal(c, username, hash, site, contact)
+	recoveryCredential, err := localRecoveryCredential()
+	if err != nil {
+		localInternal(c, err)
+		return
+	}
+	recoveryHash, err := auth.HashPassword(recoveryCredential)
+	if err != nil {
+		localInternal(c, err)
+		return
+	}
+	user, err := h.Store.InitializeLocalWithRecovery(c, username, hash, site, contact, recoveryHash)
 	if errors.Is(err, store.ErrLocalSetupComplete) {
 		response.Err(c, 409, "SETUP_COMPLETE", "管理端已完成首次设置，请登录")
 		return
@@ -91,7 +103,91 @@ func (h *LocalAuthHandler) Setup(c *gin.Context) {
 		localInternal(c, err)
 		return
 	}
-	response.Created(c, localUser(user))
+	result := localUser(user)
+	result["recoveryCredential"] = recoveryCredential
+	response.Created(c, result)
+}
+
+func localRecoveryCredential() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	defer clear(raw)
+	return "SNAIL-RECOVERY-" + strings.ToUpper(hex.EncodeToString(raw)), nil
+}
+
+func (h *LocalAuthHandler) ResetRecovery(c *gin.Context) {
+	var req struct {
+		Username           string `json:"username"`
+		RecoveryCredential string `json:"recoveryCredential"`
+		NewPassword        string `json:"newPassword"`
+	}
+	if !LocalJSON(c, &req) {
+		return
+	}
+	newHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	username := strings.ToLower(strings.TrimSpace(req.Username))
+	credential := strings.ToUpper(strings.TrimSpace(req.RecoveryCredential))
+	if !regexp.MustCompile(`^[a-z0-9_-]{3,32}$`).MatchString(username) || len(credential) != len("SNAIL-RECOVERY-")+64 || !strings.HasPrefix(credential, "SNAIL-RECOVERY-") {
+		response.Err(c, 401, "RECOVERY_INVALID", "恢复凭据无效或已使用")
+		return
+	}
+	if err = h.Store.RecoverLocalOwner(c, username, credential, newHash); err != nil {
+		if errors.Is(err, store.ErrLocalRecoveryCredentials) {
+			response.Err(c, 401, "RECOVERY_INVALID", "恢复凭据无效或已使用")
+		} else {
+			localInternal(c, err)
+		}
+		return
+	}
+	response.OK(c, gin.H{"passwordReset": true})
+}
+
+func (h *LocalAuthHandler) RecoveryStatus(c *gin.Context) {
+	_, err := h.Store.GetSetting(c, "owner_recovery_credential_hash")
+	if errors.Is(err, sql.ErrNoRows) {
+		response.OK(c, gin.H{"configured": false})
+		return
+	}
+	if err != nil {
+		localInternal(c, err)
+		return
+	}
+	response.OK(c, gin.H{"configured": true})
+}
+
+func (h *LocalAuthHandler) RotateRecovery(c *gin.Context) {
+	var req struct {
+		OwnerPassword string `json:"ownerPassword"`
+	}
+	if !LocalJSON(c, &req) {
+		return
+	}
+	owner := c.MustGet("local_owner").(*model.User)
+	if !auth.VerifyPassword(owner.PasswordHash, req.OwnerPassword) {
+		response.Err(c, 401, "OWNER_PASSWORD_INVALID", "管理密码不正确")
+		return
+	}
+	credential, err := localRecoveryCredential()
+	if err != nil {
+		localInternal(c, err)
+		return
+	}
+	hash, err := auth.HashPassword(credential)
+	if err != nil {
+		localInternal(c, err)
+		return
+	}
+	if err = h.Store.RotateLocalRecoveryCredential(c, owner.ID, hash); err != nil {
+		localInternal(c, err)
+		return
+	}
+	response.OK(c, gin.H{"recoveryCredential": credential})
 }
 func (h *LocalAuthHandler) Login(c *gin.Context) {
 	var req struct {

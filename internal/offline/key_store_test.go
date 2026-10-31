@@ -109,3 +109,45 @@ func TestContainerRejectsNonceAliasAndUnboundedKDF(t *testing.T) {
 		t.Fatal("unbounded KDF accepted")
 	}
 }
+
+func TestServiceSigningReprotectsSameIdentityWithoutSessionExpiry(t *testing.T) {
+	store := NewKeyStore(t.TempDir())
+	oldPassphrase := "Synthetic-old-signing-passphrase"
+	servicePassphrase := "Synthetic-derived-service-passphrase"
+	created, err := store.Create(oldPassphrase, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := store.EnableService(oldPassphrase, servicePassphrase)
+	if err != nil || ready.KeyID != created.KeyID || ready.State != "ready" {
+		t.Fatalf("service transition changed identity: %v %+v", err, ready)
+	}
+	store.deadline = time.Now().Add(-time.Hour)
+	request, _, err := ParseRequest(fixture(t, "TEST_ONLY.request-v2.snailreq"), ProductID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	licensePayload := Payload{FormatVersion: 2, LicenseID: "bfcbe840-f304-46bb-81aa-790e765901d1", IssuanceID: "0c7b5017-8992-4f7d-8d5a-492ab352fd79", ProductID: ProductID, Purpose: "commercial", CustomerID: "192356a7-9517-4a34-9c9e-94c3b86fbce4", Revision: 1, IssuedAt: "2026-10-29T00:00:00.000Z", NotBefore: "2026-10-29T00:00:00.000Z", Binding: request.Device, BindingState: "active"}
+	if _, _, err = store.Sign(licensePayload); err != nil {
+		t.Fatalf("service signing should not use the owner session deadline: %v", err)
+	}
+	store.Lock()
+	if _, err = store.UnlockService(servicePassphrase); err != nil {
+		t.Fatal(err)
+	}
+	if identity, _ := store.Status(); identity.KeyID != created.KeyID || identity.State != "ready" {
+		t.Fatalf("restarted service identity differs: %+v", identity)
+	}
+	if _, _, err = DecryptContainer(mustContainer(t, store), oldPassphrase); err == nil {
+		t.Fatal("old passphrase remained active after service transition")
+	}
+}
+
+func mustContainer(t *testing.T, store *KeyStore) []byte {
+	t.Helper()
+	raw, err := store.EncryptedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}

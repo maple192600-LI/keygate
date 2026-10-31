@@ -25,11 +25,13 @@ func (h *OfflineLifecycleHandler) List(c *gin.Context) {
 		return
 	}
 	term, delivery := c.Query("termState"), c.Query("deliveryState")
-	if term != "" && term != "not_yet_valid" && term != "valid" && term != "expired" && term != "perpetual" && term != "active" || delivery != "" && delivery != "pending" && delivery != "recorded" {
+	if term != "" && term != "unactivated" && term != "not_yet_valid" && term != "valid" && term != "expired" && term != "perpetual" && term != "active" || delivery != "" && delivery != "pending" && delivery != "recorded" {
 		response.BadRequest(c, "筛选状态无效")
 		return
 	}
-	rows, count, err := h.Store.OfflineLicenses(c, store.OfflineLicenseFilter{Expiring: c.Query("expiring") == "30", Search: strings.TrimSpace(c.Query("q")), CustomerID: c.Query("customerId"), TermState: term, DeliveryState: delivery, Page: page, Size: size})
+	expiring := c.Query("expiring")
+	if expiring != "" && expiring != "15d" { response.BadRequest(c,"到期筛选范围无效"); return }
+	rows, count, err := h.Store.OfflineLicenses(c, store.OfflineLicenseFilter{Expiring: expiring == "15d", Search: strings.TrimSpace(c.Query("q")), CustomerID: c.Query("customerId"), TermState: term, DeliveryState: delivery, Page: page, Size: size})
 	if err != nil {
 		h.fail(c, err)
 		return

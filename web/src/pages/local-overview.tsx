@@ -2,7 +2,7 @@ import { CalendarDays, ChevronRight, KeyRound, Plus, Send, Users } from "lucide-
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { localRequest } from "@/lib/local-offline-api"
-import LocalLicenses, { type LicenseAction } from "./local-licenses"
+import LocalLicenses from "./local-licenses"
 
 type Overview = {
   customers: number
@@ -17,18 +17,24 @@ type Overview = {
 export default function LocalOverview({
   onNavigate,
   onCreate,
-  onManage,
+  onSelectLicense,
+  hidden = false,
   epoch,
 }: {
-  onNavigate: (target: "customers" | "licenses" | "delivery", expiring?: boolean, term?: "active") => void
+  onNavigate: (
+    target: "customers" | "licenses" | "delivery",
+    expiring?: boolean,
+    term?: "active",
+    deliveryState?: "pending" | "recorded",
+  ) => void
   onCreate: () => void
-  onManage: LicenseAction
+  onSelectLicense: (id: string) => void
+  hidden?: boolean
   epoch: number
 }) {
   const [state, setState] = useState<Overview | null>(null)
   const [error, setError] = useState("")
-  const [refresh, setRefresh] = useState(0)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch and refresh reload the summary after issuance, lifecycle, or delivery changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch signals lifecycle changes that refresh the summary.
   useEffect(() => {
     let alive = true
     localRequest<Overview>("/admin/overview")
@@ -44,15 +50,20 @@ export default function LocalOverview({
     return () => {
       alive = false
     }
-  }, [epoch, refresh])
+  }, [epoch])
   const cards = [
     { label: "已登记客户", count: state?.customers, icon: Users, open: () => onNavigate("customers") },
     { label: "有效授权", count: state?.valid, icon: KeyRound, open: () => onNavigate("licenses", false, "active") },
-    { label: "待交付文件", count: state?.pendingDelivery, icon: Send, open: () => onNavigate("delivery") },
-    { label: "30天内到期", count: state?.expiring, icon: CalendarDays, open: () => onNavigate("licenses", true) },
+    {
+      label: "待交付授权码",
+      count: state?.pendingDelivery,
+      icon: Send,
+      open: () => onNavigate("delivery", false, undefined, "pending"),
+    },
+    { label: "15天内到期", count: state?.expiring, icon: CalendarDays, open: () => onNavigate("licenses", true) },
   ]
   return (
-    <section className="lc-overview">
+    <section className="lc-overview" hidden={hidden}>
       <div className="lc-page-heading">
         <h1>概览</h1>
         <Button onClick={onCreate}>
@@ -78,28 +89,15 @@ export default function LocalOverview({
       </div>
       <div className="lc-overview-columns">
         <div className="lc-overview-lists">
-          <LocalLicenses
-            epoch={epoch + refresh}
-            compact
-            title="最近发放"
-            onManage={onManage}
-            onChanged={() => setRefresh((value) => value + 1)}
-          />
-          <LocalLicenses
-            epoch={epoch + refresh}
-            compact
-            initialExpiring
-            title="30天内到期"
-            onManage={onManage}
-            onChanged={() => setRefresh((value) => value + 1)}
-          />
+          <LocalLicenses epoch={epoch} compact title="最近发放" onSelectLicense={onSelectLicense} />
+          <LocalLicenses epoch={epoch} compact initialExpiring title="15天内到期" onSelectLicense={onSelectLicense} />
         </div>
         <aside className="lc-overview-aside">
           <section className="lc-task-panel">
             <h2>待处理</h2>
-            <button type="button" onClick={() => onNavigate("delivery")}>
+            <button type="button" onClick={() => onNavigate("delivery", false, undefined, "pending")}>
               <Send aria-hidden="true" />
-              <span>{state?.pendingDelivery ?? "—"} 份文件待交付</span>
+              <span>{state?.pendingDelivery ?? "—"} 份授权码待交付</span>
               <ChevronRight aria-hidden="true" />
             </button>
             <button type="button" onClick={() => onNavigate("licenses", true)}>

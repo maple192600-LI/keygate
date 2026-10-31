@@ -12,6 +12,8 @@ type OfflineRequest struct {
 	DeviceType    string    `json:"deviceType"`
 	DeviceDigest  string    `json:"deviceDigest"`
 	DeviceLabel   string    `json:"deviceLabel"`
+	AppVersion    string    `bun:",nullzero" json:"appVersion,omitempty"`
+	BuildID       string    `bun:",nullzero" json:"buildId,omitempty"`
 	RawBytes      []byte    `json:"-"`
 	Fingerprint   string    `json:"-"`
 	CreatedBy     string    `json:"-"`
@@ -46,6 +48,9 @@ type OfflineDeviceBinding struct {
 	DeviceType        string     `json:"deviceType"`
 	DeviceDigest      string     `json:"deviceDigest"`
 	DeviceLabel       string     `json:"deviceLabel"`
+	AppVersion        string     `bun:",nullzero" json:"appVersion,omitempty"`
+	BuildID           string     `bun:",nullzero" json:"buildId,omitempty"`
+	LastSeenAt        *time.Time `json:"lastSeenAt"`
 	RegisteredAt      time.Time  `bun:",nullzero,default:now()" json:"registeredAt"`
 	SupersededAt      *time.Time `json:"supersededAt"`
 	PreviousBindingID string     `bun:",nullzero" json:"previousBindingId,omitempty"`

@@ -43,6 +43,7 @@ type KeyStore struct {
 	private       ed25519.PrivateKey
 	sessionExpiry time.Time
 	deadline      time.Time
+	serviceMode   bool
 	timer         *time.Timer
 	generation    uint64
 }
@@ -222,7 +223,7 @@ func (s *KeyStore) Status() (PublicIdentity, error) {
 		return PublicIdentity{}, err
 	}
 	state := "locked"
-	if len(s.private) > 0 && time.Now().Before(s.deadline) {
+	if len(s.private) > 0 && (s.serviceMode || time.Now().Before(s.deadline)) {
 		state = "ready"
 	} else {
 		s.locked()
@@ -292,6 +293,7 @@ func (s *KeyStore) Create(passphrase string, sessionExpiry time.Time) (PublicIde
 	s.locked()
 	s.private = private
 	s.sessionExpiry = sessionExpiry
+	s.serviceMode = false
 	s.arm()
 	return PublicIdentity{c.KeyID, c.PublicKeyPEM, "ready", c.CreatedAt}, nil
 }
@@ -309,12 +311,116 @@ func (s *KeyStore) Unlock(passphrase string, sessionExpiry time.Time) (PublicIde
 	s.locked()
 	s.private = private
 	s.sessionExpiry = sessionExpiry
+	s.serviceMode = false
 	s.arm()
 	return PublicIdentity{c.KeyID, c.PublicKeyPEM, "ready", c.CreatedAt}, nil
+}
+
+func (s *KeyStore) CreateService(passphrase string) (PublicIdentity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, private, err := encryptIdentity(passphrase)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	raw, _ := json.Marshal(c)
+	if err = s.write(raw, false); err != nil {
+		wipe(private)
+		return PublicIdentity{}, err
+	}
+	s.locked()
+	s.private = private
+	s.serviceMode = true
+	s.sessionExpiry = time.Time{}
+	s.deadline = time.Time{}
+	return PublicIdentity{c.KeyID, c.PublicKeyPEM, "ready", c.CreatedAt}, nil
+}
+
+func (s *KeyStore) UnlockService(passphrase string) (PublicIdentity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, raw, err := s.read()
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	c, private, err := DecryptContainer(raw, passphrase)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	s.locked()
+	s.private = private
+	s.serviceMode = true
+	s.sessionExpiry = time.Time{}
+	s.deadline = time.Time{}
+	return PublicIdentity{c.KeyID, c.PublicKeyPEM, "ready", c.CreatedAt}, nil
+}
+
+// EnableService preserves the existing Ed25519 identity and only changes how
+// its encrypted container is protected for unattended local service signing.
+func (s *KeyStore) EnableService(oldPassphrase, servicePassphrase string) (PublicIdentity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, raw, err := s.read()
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	c, private, err := DecryptContainer(raw, oldPassphrase)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	defer wipe(private)
+	updated, err := encryptExistingIdentity(c, private, servicePassphrase)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	encoded, err := json.Marshal(updated)
+	if err != nil {
+		return PublicIdentity{}, err
+	}
+	if err = s.write(encoded, true); err != nil {
+		return PublicIdentity{}, err
+	}
+	s.locked()
+	s.private = append(ed25519.PrivateKey(nil), private...)
+	s.serviceMode = true
+	s.sessionExpiry = time.Time{}
+	s.deadline = time.Time{}
+	return PublicIdentity{updated.KeyID, updated.PublicKeyPEM, "ready", updated.CreatedAt}, nil
+}
+
+func encryptExistingIdentity(c KeyContainer, private ed25519.PrivateKey, passphrase string) (KeyContainer, error) {
+	if !auth.ValidPassword(passphrase) {
+		return KeyContainer{}, identityError("服务签发密钥保护配置无效")
+	}
+	salt := make([]byte, 16)
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(salt); err != nil {
+		return KeyContainer{}, err
+	}
+	if _, err := rand.Read(nonce); err != nil {
+		return KeyContainer{}, err
+	}
+	c.SaltB64 = base64.RawURLEncoding.EncodeToString(salt)
+	c.NonceB64 = base64.RawURLEncoding.EncodeToString(nonce)
+	key := argon2.IDKey([]byte(passphrase), salt, 3, 65536, 1, 32)
+	defer wipe(key)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return KeyContainer{}, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return KeyContainer{}, err
+	}
+	seed := private.Seed()
+	defer wipe(seed)
+	c.CiphertextB64 = base64.RawURLEncoding.EncodeToString(aead.Seal(nil, nonce, seed, identityAAD(c)))
+	return c, nil
 }
 func (s *KeyStore) locked() {
 	wipe(s.private)
 	s.private = nil
+	s.serviceMode = false
 	s.generation++
 	if s.timer != nil {
 		s.timer.Stop()
@@ -322,7 +428,16 @@ func (s *KeyStore) locked() {
 	}
 }
 func (s *KeyStore) Lock() { s.mu.Lock(); defer s.mu.Unlock(); s.locked() }
+func (s *KeyStore) ServiceMode() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.serviceMode && len(s.private) > 0
+}
 func (s *KeyStore) arm() {
+	if s.serviceMode {
+		s.deadline = time.Time{}
+		return
+	}
 	s.generation++
 	generation := s.generation
 	if s.timer != nil {
@@ -344,14 +459,16 @@ func (s *KeyStore) arm() {
 func (s *KeyStore) Sign(p Payload) ([]byte, Payload, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.private) == 0 || !time.Now().Before(s.deadline) {
+	if len(s.private) == 0 || (!s.serviceMode && !time.Now().Before(s.deadline)) {
 		s.locked()
 		return nil, p, &Error{"SIGNING_KEY_LOCKED", "请输入签发密码解锁"}
 	}
 	p.KeyID = KeyID(s.private.Public().(ed25519.PublicKey))
 	raw, err := Sign(p, s.private)
 	if err == nil {
-		s.arm()
+		if !s.serviceMode {
+			s.arm()
+		}
 	}
 	return raw, p, err
 }

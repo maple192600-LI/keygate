@@ -36,15 +36,14 @@ func CalculateTerm(now time.Time, action string, term Term, current *Period) (Te
 			return TermResult{}, invalid("首次签发不能包含原授权")
 		}
 		if term.StartsAt != "" {
-			parsed, err := ParseUTC(term.StartsAt)
-			if err != nil {
-				return TermResult{}, err
+			parsed, err := time.ParseInLocation("2006-01-02", term.StartsAt, beijing)
+			localNow := now.In(beijing)
+			today := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, beijing)
+			if err != nil || parsed.Format("2006-01-02") != term.StartsAt || parsed.Year() < 2000 || parsed.Before(today) {
+				return TermResult{}, invalid("生效日期不能早于今天")
 			}
-			if parsed.Before(now) || parsed.Year() < 2000 || parsed.Nanosecond() != 0 {
-				return TermResult{}, invalid("生效时间必须是当前或未来的整秒")
-			}
-			start = parsed
-			anchor = parsed
+			start = parsed.UTC()
+			anchor = start
 		}
 	case "renew":
 		if current == nil || current.ExpiresAt == nil {
@@ -94,18 +93,37 @@ func CalculateTerm(now time.Time, action string, term Term, current *Period) (Te
 			return TermResult{}, invalid("永久授权不能同时设置期限")
 		}
 	case "days":
-		if term.Amount < 1 || term.Amount > 36500 || term.EndDate != "" {
-			return TermResult{}, invalid("天数须为 1 至 36500 的整数")
+		if term.Amount < 1 || term.EndDate != "" {
+			return TermResult{}, invalid("天数须为正整数")
 		}
-		v := anchor.Add(time.Duration(term.Amount) * 24 * time.Hour)
+		last := time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+		maxDays := (last.Unix() - anchor.Unix()) / int64(24*time.Hour/time.Second)
+		if int64(term.Amount) > maxDays {
+			return TermResult{}, invalid("期限超出支持的日期范围")
+		}
+		v := time.Unix(anchor.Unix()+int64(term.Amount)*int64(24*time.Hour/time.Second), 0).UTC()
 		end = &v
-	case "months":
-		if term.Amount < 1 || term.Amount > 1200 || term.EndDate != "" {
-			return TermResult{}, invalid("月数须为 1 至 1200 的整数")
+	case "months", "years":
+		if term.Amount < 1 || term.EndDate != "" {
+			return TermResult{}, invalid("期限数量须为正整数")
 		}
 		local := anchor.In(beijing)
 		year, month, day := local.Date()
-		target := time.Date(year, month+time.Month(term.Amount), 1, local.Hour(), local.Minute(), local.Second(), 0, beijing)
+		targetYear, targetMonth := year, month
+		if term.Kind == "years" {
+			if term.Amount > 9999-year {
+				return TermResult{}, invalid("期限超出支持的日期范围")
+			}
+			targetYear += term.Amount
+		} else {
+			monthsAvailable := (9999-year)*12 + 12 - int(month)
+			if term.Amount > monthsAvailable {
+				return TermResult{}, invalid("期限超出支持的日期范围")
+			}
+			monthIndex := int(month) - 1 + term.Amount
+			targetYear, targetMonth = year+monthIndex/12, time.Month(monthIndex%12+1)
+		}
+		target := time.Date(targetYear, targetMonth, 1, local.Hour(), local.Minute(), local.Second(), 0, beijing)
 		last := time.Date(target.Year(), target.Month()+1, 0, 0, 0, 0, 0, beijing).Day()
 		if day > last {
 			day = last

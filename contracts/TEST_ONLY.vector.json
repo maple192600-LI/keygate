@@ -19,23 +19,24 @@
     "notBefore": "2026-10-22T01:00:00.000Z",
     "expiresAt": "2026-11-22T01:00:00.000Z",
     "binding": {
-      "type": "windows-machineguid-sha256/v1",
+      "type": "windows-smbios-uuid-sha256/v1",
       "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
+    "bindingState": "active",
     "keyId": "lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2"
   },
   "expected": {
-    "rawBytes": 978,
-    "payloadBytes": 570,
+    "rawBytes": 1010,
+    "payloadBytes": 594,
     "signatureBytes": 64,
-    "licenseSha256": "f00cf2cac79761b04c6ce0df466cd54d7f0826662dd4db8cf47a81b173be05e1",
-    "payloadSha256": "193db215f7c355c2942546307e361419297a964e7264fbbc28b08ced229f9c70",
-    "signatureBase64url": "p76d-AHMSWqgcUwc1TjgUD6iw8BS0-ftcLzr-r5AD_kbAhENv7WmURYLh60lfBx0PzyaR0dd2mj-GRjkW7bxCQ",
+    "licenseSha256": "b57625d400490a8464c770a29fd2b9a9362d1c069aed62efa954837ba5eb781c",
+    "payloadSha256": "b4e1cdc60a9020ddb605d0c960e8fb4f306ba08ab1f0d195da0f0b5b88161075",
+    "signatureBase64url": "D5IzYAwkJZuzWv_6Q_2ADFD0UOJzFRTquaiRnwAfBPs3x0NpBuWe1SNTkdEiEuVBzSrUx7BXzQtjwrsA4MWPAg",
     "signatureValid": true
   },
   "verificationStatus": {
-    "node": "PASS：独立进程仅公钥验签；keyId、原字节摘要、编码与字段顺序通过；改字节及错误签名域被拒绝。",
-    "go": "未执行；开发T02必须完成Go/Node双向互验",
-    "schemas": "JSON语法、字段与主规格一致性、所有对象关闭未知属性已核对；未运行通用JSON Schema验证器。"
+    "node": "Pending current signed binding-state verification",
+    "go": "Pending current cross-language verification",
+    "schemas": "Pending current schema verification"
   }
 }

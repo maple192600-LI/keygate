@@ -64,7 +64,9 @@ func localTestStore(t *testing.T) *store.Store {
 
 type localTestApp struct {
 	server       *httptest.Server
+	clientServer *httptest.Server
 	client       *http.Client
+	publicClient *http.Client
 	store        *store.Store
 	runtimeToken string
 }
@@ -76,13 +78,27 @@ func localApp(t *testing.T) *localTestApp {
 	address := server.Listener.Addr().String()
 	_, port, _ := strings.Cut(address, ":")
 	cfg := &config.Config{Port: port, BaseURL: "http://" + address, Environment: "production", SnailDeployment: "local_offline", SnailDataDir: t.TempDir(), SnailRuntimeToken: strings.Repeat("c", 64), JWTSecret: strings.Repeat("s", 64), ReleaseKeyEncryptionKey: strings.Repeat("a", 64)}
-	server.Config.Handler = newLocalOfflineRouter(cfg, s)
+	adminRouter, clientRouter, closeRouter := newManagedLocalRouter(cfg, s, nil)
+	server.Config.Handler = adminRouter
 	server.Start()
-	t.Cleanup(server.Close)
+	clientServer := httptest.NewUnstartedServer(clientRouter)
+	clientServer.Start()
+	t.Cleanup(func() {
+		clientServer.Close()
+		server.Close()
+		if err := closeRouter(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	jar, _ := cookiejar.New(nil)
-	return &localTestApp{server, &http.Client{Jar: jar}, s, cfg.SnailRuntimeToken}
+	return &localTestApp{server: server, clientServer: clientServer, client: &http.Client{Jar: jar}, publicClient: &http.Client{}, store: s, runtimeToken: cfg.SnailRuntimeToken}
 }
 func (a *localTestApp) call(t *testing.T, method, path string, body any) (int, []byte) {
+	status, data, _ := a.callHeaders(t, method, path, body)
+	return status, data
+}
+
+func (a *localTestApp) callHeaders(t *testing.T, method, path string, body any) (int, []byte, http.Header) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
 	r, err := http.NewRequest(method, a.server.URL+path, bytes.NewReader(raw))
@@ -103,8 +119,79 @@ func (a *localTestApp) call(t *testing.T, method, path string, body any) (int, [
 	if err != nil {
 		t.Fatal(err)
 	}
+	return resp.StatusCode, data, resp.Header.Clone()
+}
+
+func (a *localTestApp) callClient(t *testing.T, method, path string, body any) (int, []byte) {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req, err := http.NewRequest(method, a.clientServer.URL+path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.publicClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return resp.StatusCode, data
 }
+
+func TestLocalOwnerRecoveryCredentialIsOneTimeAndRotatable(t *testing.T) {
+	a := localApp(t)
+	setup := map[string]string{"username": "recovery_owner", "password": "Synthetic-old-owner-password", "siteName": "合成恢复厂商", "contact": "合成联系方式"}
+	status, body := a.call(t, "POST", "/api/v1/local/setup", setup)
+	if status != http.StatusCreated {
+		t.Fatalf("setup %d %s", status, body)
+	}
+	var created struct {
+		Data struct {
+			RecoveryCredential string `json:"recoveryCredential"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil || len(created.Data.RecoveryCredential) < 64 {
+		t.Fatalf("setup recovery credential missing: %v %s", err, body)
+	}
+	if status, body = a.call(t, "GET", "/api/v1/admin/local-recovery/status", nil); status != http.StatusUnauthorized {
+		t.Fatalf("recovery status must require owner login: %d %s", status, body)
+	}
+	reset := map[string]string{"username": "recovery_owner", "recoveryCredential": created.Data.RecoveryCredential, "newPassword": "Synthetic-new-owner-password"}
+	if status, body = a.call(t, "POST", "/api/v1/local/recovery/reset", reset); status != http.StatusOK {
+		t.Fatalf("recovery reset %d %s", status, body)
+	}
+	if status, body = a.call(t, "POST", "/api/v1/local/recovery/reset", reset); status != http.StatusUnauthorized || !bytes.Contains(body, []byte("RECOVERY_INVALID")) {
+		t.Fatalf("one-time recovery credential was reused: %d %s", status, body)
+	}
+	if status, _ = a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "recovery_owner", "password": "Synthetic-old-owner-password"}); status != http.StatusUnauthorized {
+		t.Fatal("old password remained valid")
+	}
+	if status, _ = a.call(t, "POST", "/api/v1/auth/password/login", map[string]string{"username": "recovery_owner", "password": "Synthetic-new-owner-password"}); status != http.StatusOK {
+		t.Fatal("recovered password could not log in")
+	}
+	if status, body = a.call(t, "GET", "/api/v1/admin/local-recovery/status", nil); status != http.StatusOK || !bytes.Contains(body, []byte(`"configured":false`)) {
+		t.Fatalf("used recovery credential was not consumed: %d %s", status, body)
+	}
+	if status, body = a.call(t, "POST", "/api/v1/admin/local-recovery/rotate", map[string]string{"ownerPassword": "Synthetic-new-owner-password"}); status != http.StatusOK {
+		t.Fatalf("recovery rotation %d %s", status, body)
+	}
+	var rotated struct {
+		Data struct {
+			RecoveryCredential string `json:"recoveryCredential"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &rotated); err != nil || rotated.Data.RecoveryCredential == "" || rotated.Data.RecoveryCredential == created.Data.RecoveryCredential {
+		t.Fatalf("rotation did not return a new credential: %v %s", err, body)
+	}
+	if status, body = a.call(t, "GET", "/api/v1/admin/local-recovery/status", nil); status != http.StatusOK || !bytes.Contains(body, []byte(`"configured":true`)) {
+		t.Fatalf("rotated credential missing: %d %s", status, body)
+	}
+}
+
 func TestLocalOfflineSetupAuthenticationAndRevocation(t *testing.T) {
 	a := localApp(t)
 	setup := map[string]any{"username": "Synthetic_Owner", "password": "Synthetic-owner-password-2026", "siteName": "合成厂商", "contact": "合成联系号 010-00000000"}

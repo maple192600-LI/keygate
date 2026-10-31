@@ -9,7 +9,7 @@
     "installationId": "42bbf04a-83dc-42df-bad5-f9bd2e9b0c0e",
     "challenge": "9be6c9c6-36d4-4294-9200-4facdcfcf3f1",
     "device": {
-      "type": "windows-machineguid-sha256/v1",
+      "type": "windows-smbios-uuid-sha256/v1",
       "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "stateFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -25,7 +25,7 @@
     "installationId": "42bbf04a-83dc-42df-bad5-f9bd2e9b0c0e",
     "challenge": "9be6c9c6-36d4-4294-9200-4facdcfcf3f1",
     "binding": {
-      "type": "windows-machineguid-sha256/v1",
+      "type": "windows-smbios-uuid-sha256/v1",
       "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     "stateFingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -33,6 +33,6 @@
     "expiresAt": "2026-10-31T01:00:00.000Z",
     "keyId": "lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2"
   },
-  "rawRecovery": "{\"formatVersion\":1,\"kind\":\"license-recovery\",\"keyId\":\"lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2\",\"payloadB64\":\"eyJmb3JtYXRWZXJzaW9uIjoxLCJraW5kIjoibGljZW5zZS1yZWNvdmVyeSIsInByb2R1Y3RJZCI6ImNuLnNuYWlsZmluYW5jZS5kZXNrdG9wIiwicmVjb3ZlcnlJZCI6ImI5YzBiYjgwLTdlM2YtNDgyNy1iOGQwLTI4ODliMWJkNmFkNiIsInJlcXVlc3RJZCI6IjQyMGFmNDFiLWU1YWUtNGQ2NC05MmIyLWU5YzhkYzZmNjM4MCIsImluc3RhbGxhdGlvbklkIjoiNDJiYmYwNGEtODNkYy00MmRmLWJhZDUtZjliZDJlOWIwYzBlIiwiY2hhbGxlbmdlIjoiOWJlNmM5YzYtMzZkNC00Mjk0LTkyMDAtNGZhY2RjZmNmM2YxIiwiYmluZGluZyI6eyJ0eXBlIjoid2luZG93cy1tYWNoaW5lZ3VpZC1zaGEyNTYvdjEiLCJkaWdlc3QiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIn0sInN0YXRlRmluZ2VycHJpbnQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYmFzZWxpbmVBdCI6IjIwMjYtMTAtMjRUMDE6MDA6MDAuMDAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTAtMzFUMDE6MDA6MDAuMDAwWiIsImtleUlkIjoibGljLWVmOTdjZTEyOWRiMTkwNGM1NzQ0ODU1ZmU3MjVjNzI0Y2FlMjdlN2I4M2I5ZWUwMTdlYzVlMTg0ZGYzNjVjZDIifQ\",\"signatureB64\":\"qIHYALTX6QyWpW5aSjRxdGh9oLtrQq-t8lqrHKHXxv1A_A7CQEBrUSHwdBSQYCiXwMj-XND6R6GmcM9p4-YOAg\"}",
-  "sha256": "8087e85dd0414ae2ec058927cda6b4a7ebe5d4a2b8da823c2bbd261858b87de8"
+  "rawRecovery": "{\"formatVersion\":1,\"kind\":\"license-recovery\",\"keyId\":\"lic-ef97ce129db1904c5744855fe725c724cae27e7b83b9ee017ec5e184df365cd2\",\"payloadB64\":\"eyJmb3JtYXRWZXJzaW9uIjoxLCJraW5kIjoibGljZW5zZS1yZWNvdmVyeSIsInByb2R1Y3RJZCI6ImNuLnNuYWlsZmluYW5jZS5kZXNrdG9wIiwicmVjb3ZlcnlJZCI6ImI5YzBiYjgwLTdlM2YtNDgyNy1iOGQwLTI4ODliMWJkNmFkNiIsInJlcXVlc3RJZCI6IjQyMGFmNDFiLWU1YWUtNGQ2NC05MmIyLWU5YzhkYzZmNjM4MCIsImluc3RhbGxhdGlvbklkIjoiNDJiYmYwNGEtODNkYy00MmRmLWJhZDUtZjliZDJlOWIwYzBlIiwiY2hhbGxlbmdlIjoiOWJlNmM5YzYtMzZkNC00Mjk0LTkyMDAtNGZhY2RjZmNmM2YxIiwiYmluZGluZyI6eyJ0eXBlIjoid2luZG93cy1zbWJpb3MtdXVpZC1zaGEyNTYvdjEiLCJkaWdlc3QiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIn0sInN0YXRlRmluZ2VycHJpbnQiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwiYmFzZWxpbmVBdCI6IjIwMjYtMTAtMjRUMDE6MDA6MDAuMDAwWiIsImV4cGlyZXNBdCI6IjIwMjYtMTAtMzFUMDE6MDA6MDAuMDAwWiIsImtleUlkIjoibGljLWVmOTdjZTEyOWRiMTkwNGM1NzQ0ODU1ZmU3MjVjNzI0Y2FlMjdlN2I4M2I5ZWUwMTdlYzVlMTg0ZGYzNjVjZDIifQ\",\"signatureB64\":\"DGTeZZ3cxFkEVSJCqKbYc3GJ6kxrPgJYRT-FxR-HJZZ6sU11TwFmdpzVUo48ZyBFc5PT2mm6IWYTW05v3E41AA\"}",
+  "sha256": "947a0c46e5cb1c4e34db5f814af49a2b20671bc7ed718dca8f34b9442a70fe29"
 }

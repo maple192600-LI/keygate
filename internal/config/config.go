@@ -20,6 +20,7 @@ type Config struct {
 	SnailDeployment          string
 	SnailDataDir             string
 	SnailIdentityDir         string
+	SnailClientPort          string
 	SnailRuntimeToken        string
 	SnailRuntimeConfigSHA256 string
 
@@ -125,6 +126,7 @@ func Load() (*Config, error) {
 		SnailDeployment:          os.Getenv("SNAIL_DEPLOYMENT"),
 		SnailDataDir:             os.Getenv("SNAIL_DATA_DIR"),
 		SnailIdentityDir:         envOr("SNAIL_IDENTITY_DIR", os.Getenv("SNAIL_DATA_DIR")),
+		SnailClientPort:          envOr("SNAIL_CLIENT_PORT", "9100"),
 		SnailRuntimeToken:        os.Getenv("SNAIL_RUNTIME_SHUTDOWN_TOKEN"),
 		SnailRuntimeConfigSHA256: os.Getenv("SNAIL_RUNTIME_CONFIG_SHA256"),
 
@@ -326,6 +328,13 @@ func (c *Config) ValidateSecurityDefaults() (warnings []string, fatal []string) 
 		u, err := url.Parse(c.BaseURL)
 		if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() != c.Port || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			fatal = append(fatal, "本地管理端地址必须是 http://127.0.0.1:PORT")
+		}
+		if c.SnailClientPort != "" {
+			port, portErr := strconv.Atoi(c.SnailClientPort)
+			adminPort, adminErr := strconv.Atoi(c.Port)
+			if portErr != nil || adminErr != nil || port < 1 || port > 65535 || adminPort < 1 || adminPort > 65535 || port == adminPort {
+				fatal = append(fatal, "SNAIL_CLIENT_PORT 必须是与管理端不同的有效端口")
+			}
 		}
 		if c.RedisURL != "" || c.SMTPHost != "" || c.StripeSecretKey != "" || c.IsStorageEnabled() {
 			fatal = append(fatal, "本地离线模式不得配置在线服务")

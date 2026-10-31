@@ -16,15 +16,75 @@ import (
 	"github.com/tabloy/keygate/internal/store"
 	"github.com/uptrace/bun"
 	"strings"
+	"sync"
 	"time"
 )
 
 type OfflineIssuanceService struct {
-	Store         *store.Store
-	Keys          *offline.KeyStore
-	PreviewSecret []byte
-	fault         func(string) error
-	clock         func() time.Time
+	Store             *store.Store
+	Keys              *offline.KeyStore
+	PreviewSecret     []byte
+	ServicePassphrase string
+	fault             func(string) error
+	clock             func() time.Time
+	identityMu        sync.Mutex
+}
+
+func (s *OfflineIssuanceService) ensureServiceIdentity(ctx context.Context) error {
+	s.identityMu.Lock()
+	defer s.identityMu.Unlock()
+
+	physical, err := s.Keys.Status()
+	if err != nil {
+		return err
+	}
+	expected, err := s.Store.ExpectedSigningIdentity(ctx, physical)
+	if err != nil {
+		return err
+	}
+	created := false
+	if physical.KeyID == "" {
+		if expected.KeyID != "" {
+			return &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "原签发身份文件缺失，不能新建替换"}
+		}
+		physical, err = s.Keys.CreateService(s.ServicePassphrase)
+		if err != nil {
+			return err
+		}
+		created = true
+	}
+	expected, err = s.Store.ExpectedSigningIdentity(ctx, physical)
+	if err != nil {
+		return err
+	}
+	if expected.KeyID == "" || expected.KeyID != physical.KeyID {
+		return &offline.Error{Code: "SIGNING_IDENTITY_INVALID", Message: "签发身份与本机历史不一致，不能替换"}
+	}
+	_, err = s.Store.GetSetting(ctx, "snail_public_identity")
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	encoded, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	return store.RunInTx(ctx, s.Store.DB, func(ctx context.Context, tx bun.Tx) error {
+		if _, err := tx.NewRaw("INSERT INTO offline_actors(id,display_name) VALUES(?,?) ON CONFLICT(id) DO NOTHING", store.SigningServiceActorID, "服务签发身份服务").Exec(ctx); err != nil {
+			return err
+		}
+		if _, err := tx.NewRaw("INSERT INTO settings(key,value) VALUES('snail_public_identity',?) ON CONFLICT(key) DO NOTHING", string(encoded)).Exec(ctx); err != nil {
+			return err
+		}
+		action := "register-existing-identity"
+		if created {
+			action = "create-service-identity"
+		}
+		_, err := tx.NewInsert().Model(&model.AuditLog{ID: store.NewID(), Entity: "offline-signing-identity", EntityID: expected.KeyID, Action: action, ActorID: store.SigningServiceActorID, ActorType: "service", Changes: map[string]any{"keyId": expected.KeyID}}).Exec(ctx)
+		return err
+	})
 }
 
 func (s *OfflineIssuanceService) now() time.Time {
@@ -37,7 +97,9 @@ func (s *OfflineIssuanceService) now() time.Time {
 type OfflineIntent struct {
 	Action           string       `json:"action"`
 	LicenseID        string       `json:"licenseId,omitempty"`
+	BindingID        string       `json:"bindingId,omitempty"`
 	CustomerID       string       `json:"customerId,omitempty"`
+	DeviceLimit      int          `json:"deviceLimit,omitempty"`
 	RequestID        string       `json:"requestId,omitempty"`
 	DeviceLabel      string       `json:"deviceLabel,omitempty"`
 	ExpectedRevision int64        `json:"expectedRevision,omitempty"`
@@ -51,22 +113,34 @@ type OfflineIssueCommand struct {
 }
 type OfflinePreview struct {
 	offline.TermResult
-	BaseTime     string `json:"baseTime"`
-	PreviewBase  string `json:"previewBase"`
-	CustomerName string `json:"customerName"`
-	DeviceLabel  string `json:"deviceLabel"`
-	DeviceCode   string `json:"deviceCode"`
+	ActivationAnchor string `json:"activationAnchor,omitempty"`
+	BaseTime         string `json:"baseTime"`
+	PreviewBase      string `json:"previewBase"`
+	CustomerName     string `json:"customerName"`
+	DeviceLabel      string `json:"deviceLabel"`
+	DeviceCode       string `json:"deviceCode"`
 }
 type OfflineIssueResult struct {
-	LicenseID  string  `json:"licenseId"`
-	IssuanceID string  `json:"issuanceId"`
-	Revision   int64   `json:"revision"`
-	SHA256     string  `json:"sha256"`
-	FileName   string  `json:"fileName"`
-	KeyID      string  `json:"keyId"`
-	NotBefore  string  `json:"notBefore"`
-	ExpiresAt  *string `json:"expiresAt"`
-	Replayed   bool    `json:"replayed"`
+	LicenseID      string               `json:"licenseId"`
+	LicenseCode    string               `json:"licenseCode,omitempty"`
+	CustomerNumber string               `json:"customerNumber,omitempty"`
+	LicenseNumber  string               `json:"licenseNumber,omitempty"`
+	DisplayNumber  string               `json:"displayNumber"`
+	DeviceLimit    int                  `json:"deviceLimit,omitempty"`
+	ActiveDevices  int                  `json:"activeDevices,omitempty"`
+	Issuances      []OfflineIssuanceRef `json:"issuances,omitempty"`
+	IssuanceID     string               `json:"issuanceId"`
+	Revision       int64                `json:"revision"`
+	SHA256         string               `json:"sha256"`
+	FileName       string               `json:"fileName"`
+	KeyID          string               `json:"keyId"`
+	NotBefore      string               `json:"notBefore"`
+	ExpiresAt      *string              `json:"expiresAt"`
+	Replayed       bool                 `json:"replayed"`
+}
+type OfflineIssuanceRef struct {
+	IssuanceID string `json:"issuanceId"`
+	BindingID  string `json:"bindingId"`
 }
 type previewProof struct {
 	BaseTime  string `json:"baseTime"`
@@ -86,6 +160,9 @@ func cleanIntent(input OfflineIntent) (OfflineIntent, error) {
 			return input, offlineFailure("BAD_REQUEST", "业务编号无效，请重新选择客户、申请或授权")
 		}
 	}
+	if input.BindingID != "" && !offline.ValidUUID4(input.BindingID) {
+		return input, offlineFailure("BAD_REQUEST", "设备编号无效，请重新打开授权详情")
+	}
 	if len([]rune(input.Reason)) > 1000 || len([]rune(input.DeviceLabel)) > 80 {
 		return input, offlineFailure("BAD_REQUEST", "换机原因或设备名称过长")
 	}
@@ -93,15 +170,21 @@ func cleanIntent(input OfflineIntent) (OfflineIntent, error) {
 		return input, offlineFailure("BAD_REQUEST", "不支持的签发动作")
 	}
 	if input.Action == "initial" {
-		if input.LicenseID != "" || input.ExpectedRevision != 0 || input.CustomerID == "" || input.RequestID == "" {
-			return input, offlineFailure("BAD_REQUEST", "首次签发缺少客户或设备申请")
+		if input.LicenseID != "" || input.ExpectedRevision != 0 || input.CustomerID == "" || input.DeviceLimit < 0 {
+			return input, offlineFailure("BAD_REQUEST", "首次授权客户或设备数量无效")
+		}
+		if input.DeviceLimit == 0 {
+			input.DeviceLimit = 1
+		}
+		if input.DeviceLimit > 2147483647 {
+			return input, offlineFailure("BAD_REQUEST", "设备数量超出支持范围")
 		}
 	}
 	if input.Action != "initial" && (input.LicenseID == "" || input.ExpectedRevision < 1) {
 		return input, offlineFailure("BAD_REQUEST", "请重新打开授权详情后操作")
 	}
-	if input.Action == "transfer" && (input.RequestID == "" || input.Reason == "") {
-		return input, offlineFailure("BAD_REQUEST", "换机须提供新机申请及原因")
+	if input.Action == "transfer" && (input.Reason == "" || input.BindingID == "" || input.RequestID != "") {
+		return input, offlineFailure("BAD_REQUEST", "换机须选择原设备并说明原因")
 	}
 	if input.Action == "transfer" && (input.Term.Kind != "" || input.Term.Amount != 0 || input.Term.EndDate != "" || input.Term.StartsAt != "") {
 		return input, offlineFailure("BAD_REQUEST", "换机保留原期限，请勿同时设置新期限")
@@ -196,9 +279,16 @@ func (s *OfflineIssuanceService) load(ctx context.Context, db bun.IDB, input Off
 			if requestID != "" && requestID != out.previous.RequestID {
 				return out, offlineFailure("BAD_REQUEST", "续期不能同时换机")
 			}
-			requestID = out.previous.RequestID
-			if input.DeviceLabel != "" && input.DeviceLabel != out.binding.DeviceLabel {
-				return out, offlineFailure("BAD_REQUEST", "续期不能改写设备登记")
+			requestID = ""
+		}
+		if input.Action == "transfer" && input.BindingID != "" {
+			out.binding = new(model.OfflineDeviceBinding)
+			q := db.NewSelect().Model(out.binding).Where("id=? AND license_id=? AND superseded_at IS NULL", input.BindingID, out.license.ID)
+			if lock {
+				q.For("UPDATE")
+			}
+			if err := q.Scan(ctx); err != nil {
+				return out, err
 			}
 		}
 	}
@@ -213,17 +303,16 @@ func (s *OfflineIssuanceService) load(ctx context.Context, db bun.IDB, input Off
 	if !out.customer.IssuanceEnabled {
 		return out, offlineFailure("ISSUANCE_STOPPED", "此客户已停止续发")
 	}
-	if out.customer.ContactMethod == "" && (out.customer.Email == nil || *out.customer.Email == "") {
-		return out, offlineFailure("CUSTOMER_CONTACT_REQUIRED", "发放前请补充客户联系方式或邮箱")
+	if requestID != "" {
+		out.request = new(model.OfflineRequest)
+		if err := db.NewSelect().Model(out.request).Where("request_id = ?", requestID).Scan(ctx); err != nil {
+			return out, err
+		}
+		if out.request.ProductCode != offline.ProductID {
+			return out, offlineFailure("LICENSE_WRONG_PRODUCT", "申请不属于蜗牛财务")
+		}
 	}
-	out.request = new(model.OfflineRequest)
-	if err := db.NewSelect().Model(out.request).Where("request_id = ?", requestID).Scan(ctx); err != nil {
-		return out, err
-	}
-	if out.request.ProductCode != offline.ProductID {
-		return out, offlineFailure("LICENSE_WRONG_PRODUCT", "申请不属于蜗牛财务")
-	}
-	if input.Action == "transfer" && out.binding.DeviceType == out.request.DeviceType && out.binding.DeviceDigest == out.request.DeviceDigest {
+	if input.Action == "transfer" && out.request != nil && out.binding.DeviceType == out.request.DeviceType && out.binding.DeviceDigest == out.request.DeviceDigest {
 		return out, offlineFailure("BAD_REQUEST", "新机申请与当前设备相同，请核对设备")
 	}
 	return out, nil
@@ -250,18 +339,36 @@ func (s *OfflineIssuanceService) Preview(ctx context.Context, input OfflineInten
 	}
 	proof, token := s.proof(input, s.now())
 	now, _ := offline.ParseUTC(proof.BaseTime)
-	term, err := offline.CalculateTerm(now, input.Action, input.Term, periodFor(data))
-	if err != nil {
-		return OfflinePreview{}, err
+	var term offline.TermResult
+	if input.Action == "transfer" && input.RequestID == "" {
+		term = offline.TermResult{Anchor: proof.BaseTime, Period: *periodFor(data)}
+	} else {
+		term, err = offline.CalculateTerm(now, input.Action, input.Term, periodFor(data))
+		if err != nil {
+			return OfflinePreview{}, err
+		}
 	}
-	label := data.request.DeviceLabel
+	label, deviceCode := "", ""
+	if data.request != nil {
+		label, deviceCode = data.request.DeviceLabel, "STQ-WIN1-"+data.request.DeviceDigest
+	}
 	if input.DeviceLabel != "" {
 		label = input.DeviceLabel
 	}
 	if input.Action == "renew" {
 		label = data.binding.DeviceLabel
 	}
-	return OfflinePreview{term, proof.BaseTime, token, data.customer.DisplayName, label, "STQ-WIN1-" + data.request.DeviceDigest}, nil
+	anchor := ""
+	if input.Action == "initial" && input.RequestID == "" {
+		if input.Term.StartsAt == "" {
+			anchor = "first-successful-activation"
+			term.NotBefore = ""
+			term.ExpiresAt = nil
+		} else {
+			anchor = "scheduled"
+		}
+	}
+	return OfflinePreview{term, anchor, proof.BaseTime, token, data.customer.DisplayName, label, deviceCode}, nil
 }
 func IssuanceResult(row *model.LicenseIssuance, replayed bool) OfflineIssueResult {
 	result := OfflineIssueResult{LicenseID: row.LicenseID, IssuanceID: row.ID, Revision: row.Revision, SHA256: row.SHA256, FileName: row.FileName, KeyID: row.KeyID, NotBefore: row.NotBefore.UTC().Format("2006-01-02T15:04:05.000Z"), Replayed: replayed}
@@ -271,14 +378,177 @@ func IssuanceResult(row *model.LicenseIssuance, replayed bool) OfflineIssueResul
 	}
 	return result
 }
-func (s *OfflineIssuanceService) Issue(ctx context.Context, actor string, command OfflineIssueCommand) (OfflineIssueResult, error) {
+
+func (s *OfflineIssuanceService) Operation(ctx context.Context, operationID string) (OfflineIssueResult, error) {
+	row, err := s.Store.IssuanceOperation(ctx, operationID)
+	if err == nil {
+		return IssuanceResult(row, true), nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return OfflineIssueResult{}, err
+	}
+	kind, raw, err := s.Store.OfflineManagementOperation(ctx, operationID)
+	if err != nil {
+		return OfflineIssueResult{}, err
+	}
+	if kind != "issue-license" && kind != "renew-license" && kind != "release-device-binding" {
+		return OfflineIssueResult{}, sql.ErrNoRows
+	}
+	var result OfflineIssueResult
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return OfflineIssueResult{}, err
+	}
+	if result.LicenseID == "" {
+		return OfflineIssueResult{}, errors.New("stored license operation result has no license id")
+	}
+	result.LicenseCode = ""
+	if kind == "issue-license" {
+		result.Revision = 0
+		if result.CustomerNumber == "" || result.LicenseNumber == "" || result.DisplayNumber == "" || result.DeviceLimit == 0 {
+			view, viewErr := s.Store.OfflineLicense(ctx, result.LicenseID)
+			if viewErr != nil {
+				return OfflineIssueResult{}, viewErr
+			}
+			if result.CustomerNumber == "" {
+				result.CustomerNumber = view.CustomerNumber
+			}
+			if result.LicenseNumber == "" {
+				result.LicenseNumber = view.LicenseNumber
+			}
+			if result.DisplayNumber == "" {
+				result.DisplayNumber = view.DisplayNumber
+			}
+			if result.DeviceLimit == 0 {
+				result.DeviceLimit = view.DeviceLimit
+			}
+		}
+	}
+	result.Replayed = true
+	return result, nil
+}
+
+func (s *OfflineIssuanceService) CreateLicense(ctx context.Context, actor string, command OfflineIssueCommand) (OfflineIssueResult, error) {
 	intent, err := cleanIntent(command.OfflineIntent)
 	if err != nil {
 		return OfflineIssueResult{}, err
 	}
 	command.OfflineIntent = intent
 	if !offline.ValidUUID4(command.OperationID) {
+		return OfflineIssueResult{}, offlineFailure("BAD_REQUEST", "授权操作号须为 UUID v4")
+	}
+	if err = s.ensureServiceIdentity(ctx); err != nil {
+		return OfflineIssueResult{}, err
+	}
+	operationHash := hashJSON(command)
+	var result OfflineIssueResult
+	err = store.RunInTx(ctx, s.Store.DB, func(ctx context.Context, tx bun.Tx) error {
+		if err := store.EnsureOfflineActor(ctx, tx, actor); err != nil {
+			return err
+		}
+		if err := store.AllowOfflineWriteIn(ctx, tx, "issue"); err != nil {
+			return err
+		}
+		if _, err := tx.NewRaw("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", "snail-issuance:"+command.OperationID).Exec(ctx); err != nil {
+			return err
+		}
+		var prior struct {
+			OperationHash string
+			Result        json.RawMessage
+		}
+		err := tx.NewRaw("SELECT operation_hash,result FROM offline_management_operations WHERE operation_id=?", command.OperationID).Scan(ctx, &prior)
+		if err == nil {
+			if prior.OperationHash != operationHash {
+				return offlineFailure("OPERATION_CONFLICT", "该操作号已用于不同条件，请查询原授权")
+			}
+			var saved struct {
+				LicenseID string `json:"licenseId"`
+			}
+			if err = json.Unmarshal(prior.Result, &saved); err != nil {
+				return err
+			}
+			licenseRow := new(model.License)
+			if err = tx.NewSelect().Model(licenseRow).Where("id=? AND fulfillment_mode='offline_file'", saved.LicenseID).Scan(ctx); err != nil {
+				return err
+			}
+			result = OfflineIssueResult{LicenseID: licenseRow.ID, LicenseCode: s.Store.DecryptLicenseKey(licenseRow), CustomerNumber: "C-" + strings.ToUpper(strings.ReplaceAll(licenseRow.CustomerID, "-", "")), LicenseNumber: "L-" + strings.ToUpper(strings.ReplaceAll(licenseRow.ID, "-", "")), DisplayNumber: licenseRow.DisplayNumber, DeviceLimit: licenseRow.DeviceLimit, Replayed: true}
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		base, err := s.verifyProof(intent, command.PreviewBase)
+		if err != nil {
+			return err
+		}
+		if _, err = offline.CalculateTerm(base, "initial", intent.Term, nil); err != nil {
+			return err
+		}
+		data, err := s.load(ctx, tx, intent, true)
+		if err != nil {
+			return err
+		}
+		var productID, planID string
+		if err = tx.NewRaw("SELECT p.id,pl.id FROM products p JOIN plans pl ON pl.product_id=p.id WHERE p.license_product_code=? AND pl.slug='offline-standard'", offline.ProductID).Scan(ctx, &productID, &planID); err != nil {
+			return err
+		}
+		var number int64
+		if err = tx.NewRaw("SELECT nextval('snail_license_display_seq')").Scan(ctx, &number); err != nil {
+			return err
+		}
+		base = base.UTC().Truncate(time.Second)
+		start := base
+		var scheduled *time.Time
+		if intent.Term.StartsAt != "" {
+			parsed, parseErr := time.ParseInLocation("2006-01-02", intent.Term.StartsAt, time.FixedZone("Asia/Shanghai", 8*3600))
+			if parseErr != nil || parsed.Format("2006-01-02") != intent.Term.StartsAt {
+				return offlineFailure("BAD_REQUEST", "请选择有效的生效日期")
+			}
+			scheduled = &parsed
+			start = parsed
+		}
+		licenseRow := &model.License{ID: store.NewID(), ProductID: productID, PlanID: planID, CustomerID: data.customer.ID, FulfillmentMode: "offline_file", IssuanceEnabled: true, DeviceLimit: intent.DeviceLimit, LicenseKey: license.GenerateKey("KG"), DisplayNumber: fmt.Sprintf("SN-%s-%04d", base.In(time.FixedZone("Asia/Shanghai", 8*3600)).Format("200601"), number), Status: "active", ValidFrom: start, TermKind: intent.Term.Kind, TermAmount: intent.Term.Amount, TermStartsAt: scheduled}
+		if intent.Term.Kind == "date" {
+			date, parseErr := time.Parse("2006-01-02", intent.Term.EndDate)
+			if parseErr != nil || date.Format("2006-01-02") != intent.Term.EndDate {
+				return offlineFailure("BAD_REQUEST", "请选择有效的截止日期")
+			}
+			licenseRow.TermEndDate = &date
+		}
+		if err = s.Store.CreateOfflineLicenseIn(ctx, tx, licenseRow); err != nil {
+			return err
+		}
+		result = OfflineIssueResult{LicenseID: licenseRow.ID, LicenseCode: licenseRow.LicenseKey, CustomerNumber: "C-" + strings.ToUpper(strings.ReplaceAll(data.customer.ID, "-", "")), LicenseNumber: "L-" + strings.ToUpper(strings.ReplaceAll(licenseRow.ID, "-", "")), DisplayNumber: licenseRow.DisplayNumber, DeviceLimit: licenseRow.DeviceLimit}
+		savedResult := result
+		savedResult.LicenseCode = ""
+		saved, _ := json.Marshal(savedResult)
+		if _, err = tx.NewRaw("INSERT INTO offline_management_operations(operation_id,operation_hash,kind,result,created_by) VALUES(?,?,?,?,?)", command.OperationID, operationHash, "issue-license", string(saved), actor).Exec(ctx); err != nil {
+			return err
+		}
+		return store.LocalAuditIn(ctx, tx, actor, "offline-license", licenseRow.ID, "create", map[string]any{"displayNumber": licenseRow.DisplayNumber, "deviceLimit": licenseRow.DeviceLimit, "termKind": licenseRow.TermKind, "termAmount": licenseRow.TermAmount, "termEndDate": intent.Term.EndDate, "termStartsAt": intent.Term.StartsAt})
+	})
+	return result, err
+}
+
+func (s *OfflineIssuanceService) Issue(ctx context.Context, actor string, command OfflineIssueCommand) (OfflineIssueResult, error) {
+	intent, err := cleanIntent(command.OfflineIntent)
+	if err != nil {
+		return OfflineIssueResult{}, err
+	}
+	command.OfflineIntent = intent
+	if intent.Action == "renew" {
+		return s.renewDevices(ctx, actor, command)
+	}
+	if intent.Action == "transfer" && intent.RequestID == "" {
+		return s.releaseBinding(ctx, actor, command)
+	}
+	if intent.Action == "initial" && intent.RequestID == "" {
+		return s.CreateLicense(ctx, actor, command)
+	}
+	if !offline.ValidUUID4(command.OperationID) {
 		return OfflineIssueResult{}, offlineFailure("BAD_REQUEST", "签发操作号须为 UUID v4")
+	}
+	if err = s.ensureServiceIdentity(ctx); err != nil {
+		return OfflineIssueResult{}, err
 	}
 	operationHash := hashJSON(command)
 	var result OfflineIssueResult
@@ -354,7 +624,7 @@ func (s *OfflineIssuanceService) Issue(ctx context.Context, actor string, comman
 			}
 		}
 		issuanceID := store.NewID()
-		payload := offline.Payload{FormatVersion: 2, LicenseID: data.license.ID, IssuanceID: issuanceID, ProductID: offline.ProductID, Purpose: "commercial", CustomerID: data.customer.ID, Revision: data.license.CurrentRevision + 1, IssuedAt: base.UTC().Format("2006-01-02T15:04:05.000Z"), NotBefore: term.NotBefore, ExpiresAt: term.ExpiresAt, Binding: offline.Device{Type: binding.DeviceType, Digest: binding.DeviceDigest}}
+		payload := offline.Payload{FormatVersion: 2, LicenseID: data.license.ID, IssuanceID: issuanceID, ProductID: offline.ProductID, Purpose: "commercial", CustomerID: data.customer.ID, Revision: data.license.CurrentRevision + 1, IssuedAt: base.UTC().Format("2006-01-02T15:04:05.000Z"), NotBefore: term.NotBefore, ExpiresAt: term.ExpiresAt, Binding: offline.Device{Type: binding.DeviceType, Digest: binding.DeviceDigest}, BindingState: "active"}
 		raw, payload, err := s.Keys.Sign(payload)
 		if err != nil {
 			return err

@@ -36,7 +36,7 @@
       ],
       "properties": {
         "type": {
-          "const": "windows-machineguid-sha256/v1"
+          "const": "windows-smbios-uuid-sha256/v1"
         },
         "digest": {
           "type": "string",

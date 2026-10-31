@@ -24,7 +24,26 @@ func (h *OfflineDeliveryHandler) List(c *gin.Context) {
 	}
 	response.OK(c, gin.H{"items": rows})
 }
+func (h *OfflineDeliveryHandler) ListLicense(c *gin.Context) {
+	rows, err := h.Store.OfflineLicenseDeliveries(c, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			response.NotFound(c, "客户授权不存在")
+		} else {
+			localOfflineError(c, err)
+		}
+		return
+	}
+	response.OK(c, gin.H{"items": rows})
+}
 func (h *OfflineDeliveryHandler) Record(c *gin.Context) {
+	issuanceID := c.Param("id")
+	h.record(c, &issuanceID, "")
+}
+func (h *OfflineDeliveryHandler) RecordLicense(c *gin.Context) {
+	h.record(c, nil, c.Param("id"))
+}
+func (h *OfflineDeliveryHandler) record(c *gin.Context, issuanceID *string, licenseID string) {
 	var input struct {
 		OperationID string `json:"operationId"`
 		Method      string `json:"method"`
@@ -45,10 +64,10 @@ func (h *OfflineDeliveryHandler) Record(c *gin.Context) {
 		response.BadRequest(c, "请选择交付方式")
 		return
 	}
-	row, replayed, err := h.Store.RecordOfflineDelivery(c, &store.OfflineDelivery{IssuanceID: c.Param("id"), OperationID: input.OperationID, Method: input.Method, Recipient: input.Recipient, DeliveredAt: stamp, Notes: input.Notes, CreatedBy: c.GetString("user_id")})
+	row, replayed, err := h.Store.RecordOfflineDelivery(c, &store.OfflineDelivery{LicenseID: licenseID, IssuanceID: issuanceID, OperationID: input.OperationID, Method: input.Method, Recipient: input.Recipient, DeliveredAt: stamp, Notes: input.Notes, CreatedBy: c.GetString("user_id")})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			response.NotFound(c, "授权签发原件不存在")
+			response.NotFound(c, "客户授权或授权签发原件不存在")
 		} else {
 			localOfflineError(c, err)
 		}

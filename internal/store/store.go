@@ -86,6 +86,16 @@ func (s *Store) migrationDB() (*bun.DB, error) {
 	return bun.NewDB(sqldb, pgdialect.New()), nil
 }
 
+func (s *Store) DropDatabase(ctx context.Context, name string) error {
+	db, err := s.migrationDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+name)
+	return err
+}
+
 // RunMigrations executes all .up.sql files from the migrations directory in order.
 // Guarantees:
 //   - Advisory lock prevents concurrent execution across multiple instances
